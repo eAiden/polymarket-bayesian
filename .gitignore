@@ -1,0 +1,18 @@
+.next/
+node_modules/
+
+# Data files — persisted by Railway/KV, not tracked in git
+data/markets.json
+data/paper-trading.json
+data/signal-log.json
+data/calibration.json
+data/model-weights.json
+data/waitlist.csv
+data/*.lock
+
+# Secrets
+.env.local
+.env*.local
+
+# Gstack metadata
+.gstack/

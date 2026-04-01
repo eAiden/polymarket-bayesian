@@ -1,0 +1,20 @@
+{
+  "framework": "nextjs",
+  "functions": {
+    "app/api/scan/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/markets/route.ts": {
+      "maxDuration": 10
+    },
+    "app/api/alerts/route.ts": {
+      "maxDuration": 10
+    },
+    "app/api/train/route.ts": {
+      "maxDuration": 30
+    }
+  },
+  "env": {
+    "NEXT_PUBLIC_APP_URL": "@app_url"
+  }
+}
