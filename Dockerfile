@@ -9,9 +9,12 @@ RUN npm ci
 # Copy source
 COPY . .
 
+# Ensure data dir exists (pipeline writes JSON here at runtime)
+RUN mkdir -p data
+
 ENV NODE_ENV=production
 ENV PORT=3001
 
 EXPOSE 3001
 
-CMD ["node", "--import", "tsx/esm", "server/index.ts"]
+CMD ["npx", "tsx", "server/index.ts"]
