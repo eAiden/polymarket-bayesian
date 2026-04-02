@@ -1,6 +1,5 @@
 // Signal extraction via Claude — batched: 10 markets per prompt instead of 1 per market.
-import { execFile } from "child_process";
-import { promisify } from "util";
+import Anthropic from "@anthropic-ai/sdk";
 import type { FilteredMarket, ExtractedSignal, MarketEnrichment, DailySnapshot, NewsSignal, ScanError } from "./types";
 import { fetchNewsForMarket, formatNewsForPrompt } from "./news";
 import { fetchCrossMarketData, formatCrossMarketForPrompt, type CrossMarketMatch } from "./crossmarket";
@@ -8,24 +7,21 @@ import { fetchOrderBook, fetchRecentTrades, formatOrderBookForPrompt } from "./o
 import { fetchFredData, formatFredForPrompt } from "./fred";
 import { fetchCryptoPrices, formatCryptoForPrompt } from "./crypto";
 
-const execFileAsync = promisify(execFile);
-
 const EXTRACTION_MODEL = "claude-sonnet-4-6";
-const CLAUDE_PATH = process.env.CLAUDE_PATH || "/opt/homebrew/bin/claude";
 const BATCH_SIZE = 10;
 
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
 async function callClaude(systemPrompt: string, userPrompt: string, model = EXTRACTION_MODEL): Promise<string> {
-  const { stdout } = await execFileAsync(CLAUDE_PATH, [
-    "--print",
-    "--model", model,
-    "--system-prompt", systemPrompt,
-    userPrompt,
-  ], {
-    cwd: "/tmp",
-    timeout: 240_000,
-    maxBuffer: 1024 * 1024 * 8,
+  const message = await anthropic.messages.create({
+    model,
+    max_tokens: 8192,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
   });
-  return stdout;
+  const block = message.content[0];
+  if (block.type !== "text") throw new Error("Unexpected Claude response type");
+  return block.text;
 }
 
 // ─── Batch result type ────────────────────────────────────────────────────────
