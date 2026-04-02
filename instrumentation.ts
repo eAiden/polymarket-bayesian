@@ -1,13 +1,12 @@
 // Next.js instrumentation hook — runs once on server startup.
 // Runs DB migration, then schedules:
-//   1. Daily full scan at 08:00
+//   1. Daily full scan at 08:00 (checked every minute via setInterval)
 //   2. News monitor every 5 minutes
 
 export async function register() {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   const { migrate } = await import("./lib/db");
-  const { schedule } = await import("node-cron");
   const { runScanPipeline } = await import("./lib/pipeline");
   const { runNewsMonitor } = await import("./lib/news-monitor");
 
@@ -19,16 +18,31 @@ export async function register() {
     console.error("[db] Migration failed:", err);
   }
 
-  // Daily scan at 8am
-  schedule("0 8 * * *", async () => {
-    console.log("[cron] Running daily scan...");
-    try { await runScanPipeline(); } catch (err) { console.error("[cron]", err); }
-  });
+  // ── Simple cron replacement using setInterval ─────────────────────────────
+  // Tracks the last time each job ran (as "YYYY-MM-DD" for daily, epoch ms for interval)
+  let lastDailyScanDate = "";
+  let lastNewsMonitorMs = 0;
 
-  // News monitor every 5 minutes
-  schedule("*/5 * * * *", async () => {
-    try { await runNewsMonitor(); } catch (err) { console.error("[cron] news:", err); }
-  });
+  const FIVE_MIN_MS = 5 * 60 * 1000;
 
-  console.log("[cron] Scheduled: daily scan @ 08:00, news monitor every 5min");
+  setInterval(async () => {
+    const now = new Date();
+
+    // Daily scan at 08:00
+    const dateStr = now.toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const hour = now.getUTCHours();
+    if (hour >= 8 && dateStr !== lastDailyScanDate) {
+      lastDailyScanDate = dateStr;
+      console.log("[cron] Running daily scan...");
+      try { await runScanPipeline(); } catch (err) { console.error("[cron] daily scan:", err); }
+    }
+
+    // News monitor every 5 minutes
+    if (Date.now() - lastNewsMonitorMs >= FIVE_MIN_MS) {
+      lastNewsMonitorMs = Date.now();
+      try { await runNewsMonitor(); } catch (err) { console.error("[cron] news monitor:", err); }
+    }
+  }, 60_000); // tick every 60 seconds
+
+  console.log("[cron] Scheduled: daily scan @ 08:00 UTC, news monitor every 5min");
 }
