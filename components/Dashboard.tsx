@@ -114,6 +114,10 @@ export function Dashboard({ initialData }: DashboardProps) {
     setScanProgress(null);
     try {
       const res = await fetch("/api/scan", { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `Server error ${res.status}`);
+      }
       if (!res.body) throw new Error("No response stream");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
