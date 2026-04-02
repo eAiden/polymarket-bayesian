@@ -16,10 +16,10 @@ export async function fetchOrderBook(tokenId: string): Promise<OrderBookData | n
       if (!res.ok) return null;
       const data = await res.json();
 
-      const bids: Array<{ price: number; size: number }> = (data.bids ?? [])
+      const bids: Array<{ price: number; size: number }> = (Array.isArray(data.bids) ? data.bids : [])
         .map((b: { price: string; size: string }) => ({ price: parseFloat(b.price), size: parseFloat(b.size) }))
         .filter((b: { price: number; size: number }) => !isNaN(b.price) && !isNaN(b.size));
-      const asks: Array<{ price: number; size: number }> = (data.asks ?? [])
+      const asks: Array<{ price: number; size: number }> = (Array.isArray(data.asks) ? data.asks : [])
         .map((a: { price: string; size: string }) => ({ price: parseFloat(a.price), size: parseFloat(a.size) }))
         .filter((a: { price: number; size: number }) => !isNaN(a.price) && !isNaN(a.size));
 
@@ -77,7 +77,7 @@ export async function fetchRecentTrades(tokenId: string): Promise<TradeData | nu
       if (!res.ok) return null;
       const data = await res.json();
 
-      const trades: RawTrade[] = Array.isArray(data) ? data : (data.trades ?? []);
+      const trades: RawTrade[] = Array.isArray(data) ? data : (Array.isArray(data.trades) ? data.trades : []);
       if (trades.length === 0) return null;
 
       let buyVolume = 0;
