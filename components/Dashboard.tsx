@@ -227,15 +227,13 @@ export function Dashboard({ initialData }: DashboardProps) {
         </div>
         <div className="header-right">
           <span className="last-updated">Updated {relativeTime(store.lastScanAt)}</span>
-          {process.env.NEXT_PUBLIC_SHOW_SCAN === "true" && (
-            <button
-              className="scan-btn"
-              onClick={handleScan}
-              disabled={scanning}
-            >
-              {scanning ? "Scanning…" : "Run Scan"}
-            </button>
-          )}
+          <button
+            className="scan-btn"
+            onClick={handleScan}
+            disabled={scanning}
+          >
+            {scanning ? "Scanning…" : "Run Scan"}
+          </button>
         </div>
       </header>
 
@@ -430,16 +428,10 @@ export function Dashboard({ initialData }: DashboardProps) {
               {store.markets.length === 0 ? (
                 <>
                   <p className="empty-title">No data yet</p>
-                  <p className="empty-sub">
-                    {process.env.NEXT_PUBLIC_SHOW_SCAN === "true"
-                      ? "Run a scan to fetch markets and extract signals via Claude."
-                      : "Markets are scanned automatically every morning. Check back soon."}
-                  </p>
-                  {process.env.NEXT_PUBLIC_SHOW_SCAN === "true" && (
-                    <button className="scan-btn" onClick={handleScan} disabled={scanning}>
-                      {scanning ? "Scanning…" : "Run First Scan"}
-                    </button>
-                  )}
+                  <p className="empty-sub">Run a scan to fetch markets and extract signals via Claude.</p>
+                  <button className="scan-btn" onClick={handleScan} disabled={scanning}>
+                    {scanning ? "Scanning…" : "Run First Scan"}
+                  </button>
                 </>
               ) : (
                 <p className="empty-sub">No markets match the current filters.</p>
