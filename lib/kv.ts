@@ -50,6 +50,22 @@ export function kvSet(key: string, value: unknown): void {
   }).catch(err => console.warn(`[kv] set "${key}" failed:`, (err as Error).message));
 }
 
+// ─── Write with TTL (fire-and-forget) ────────────────────────────────────────
+
+export function kvSetEx(key: string, value: unknown, ttlSeconds: number): void {
+  if (!isKvConfigured()) return;
+  const encoded = JSON.stringify(value);
+  fetch(`${KV_URL}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${KV_TOKEN!}`,
+      "Content-Type": "application/json",
+    },
+    // Upstash pipeline-format: ["SET", key, value, "EX", ttl]
+    body: JSON.stringify(["SET", key, encoded, "EX", ttlSeconds]),
+  }).catch(err => console.warn(`[kv] setex "${key}" failed:`, (err as Error).message));
+}
+
 // ─── Append to a capped JSON array ───────────────────────────────────────────
 // Reads existing array from KV, appends item, writes back. Cap prevents unbounded growth.
 // Note: not atomic — fine for our single-writer-per-key model.

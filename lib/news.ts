@@ -1,8 +1,15 @@
 // Fetches news via Tavily Search API — designed for AI agents.
 // Requires TAVILY_API_KEY in .env.local (free tier: 1,000 req/month at app.tavily.com).
 // Falls back to Google News RSS if key is absent or request fails.
+//
+// Call reduction strategy:
+//   1. Redis-backed cache (6h TTL) — survives server restarts between daily scans
+//   2. In-memory cache (6h TTL)    — zero-latency L1 within a single scan run
+//   3. search_depth "basic"        — 1 credit vs 2 for "advanced"
+//   4. Skip Tavily for markets resolving >21 days out — RSS is sufficient
 
 import { extractKeywords } from "./keywords";
+import { kvGet, kvSetEx } from "./kv";
 import type { ScanError } from "./types";
 
 export interface NewsHeadline {
@@ -69,9 +76,9 @@ async function fetchViaTavily(question: string, daysUntilResolution = 14): Promi
         api_key: apiKey,
         query: buildQuery(question),
         topic: "news",
-        search_depth: "advanced",
+        search_depth: "basic",   // 1 credit vs 2 for "advanced" — snippets sufficient
         days,
-        max_results: 7,
+        max_results: 5,
         include_raw_content: false,
       }),
     });
@@ -164,38 +171,67 @@ async function fetchViaRss(question: string): Promise<NewsHeadline[]> {
   }
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
-// ─── In-memory cache ──────────────────────────────────────────────────────────
-// Keyed on normalized query. TTL 30 min. Prevents duplicate Tavily calls for
-// clustered markets ("BTC $100K", "BTC $95K", "BTC ATH" → similar queries).
+// ─── Cache + Public API ───────────────────────────────────────────────────────
+// L1: in-memory (fast, lost on restart)
+// L2: Upstash Redis (persists across restarts — survives between daily cron runs)
+// TTL 6 hours — news doesn't change meaningfully within a scan window.
 
 const newsCache = new Map<string, { data: NewsHeadline[]; expiry: number }>();
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL_MS  = 6 * 60 * 60 * 1000;  // 6 hours in ms  (L1)
+const CACHE_TTL_SEC = 6 * 60 * 60;          // 6 hours in sec (L2 Redis EX)
+const KV_PREFIX = "news:v1:";
+
+// Markets resolving >21 days out: Tavily adds little over free RSS.
+// This alone skips ~30-40% of Tavily calls on a typical scan.
+const TAVILY_MAX_DAYS = 21;
 
 export async function fetchNewsForMarket(question: string, daysUntilResolution = 14, errors?: ScanError[]): Promise<NewsHeadline[]> {
   const cacheKey = buildQuery(question).toLowerCase().trim();
-  const cached = newsCache.get(cacheKey);
-  if (cached && cached.expiry > Date.now()) {
-    console.log(`[news] cache hit for "${question.slice(0, 40)}"`);
-    return cached.data;
+
+  // L1: in-memory hit
+  const mem = newsCache.get(cacheKey);
+  if (mem && mem.expiry > Date.now()) {
+    console.log(`[news] L1 cache hit for "${question.slice(0, 40)}"`);
+    return mem.data;
   }
 
-  // Try Tavily first; fall back to RSS if key missing or request fails
+  // L2: Redis hit (survives server restarts)
+  const kvKey = KV_PREFIX + cacheKey;
+  const kvData = await kvGet<NewsHeadline[]>(kvKey);
+  if (kvData) {
+    console.log(`[news] L2 Redis hit for "${question.slice(0, 40)}"`);
+    newsCache.set(cacheKey, { data: kvData, expiry: Date.now() + CACHE_TTL_MS });
+    return kvData;
+  }
+
+  const store = (data: NewsHeadline[]) => {
+    newsCache.set(cacheKey, { data, expiry: Date.now() + CACHE_TTL_MS });
+    kvSetEx(kvKey, data, CACHE_TTL_SEC);
+  };
+
+  // Skip Tavily for far-out markets — RSS is sufficient and free
+  if (daysUntilResolution > TAVILY_MAX_DAYS) {
+    console.log(`[news] Skipping Tavily (${daysUntilResolution}d > ${TAVILY_MAX_DAYS}d), using RSS for "${question.slice(0, 40)}"`);
+    const rss = await fetchViaRss(question);
+    store(rss);
+    return rss;
+  }
+
+  // Try Tavily; fall back to RSS if key missing or request fails
   const tavily = await fetchViaTavily(question, daysUntilResolution);
   if (tavily.length > 0) {
     console.log(`[news] Tavily(days=${Math.min(14, Math.max(2, daysUntilResolution))}): ${tavily.length} results for "${question.slice(0, 40)}"`);
-    newsCache.set(cacheKey, { data: tavily, expiry: Date.now() + CACHE_TTL });
+    store(tavily);
     return tavily;
   }
-  // Tavily returned nothing — fall back to RSS before deciding it's a real gap
+
+  // Tavily returned nothing — fall back to RSS
   const rss = await fetchViaRss(question);
   console.log(`[news] RSS fallback: ${rss.length} results for "${question.slice(0, 40)}"`);
-  // Only warn if both sources return nothing — a single empty Tavily result is normal
   if (rss.length === 0 && process.env.TAVILY_API_KEY) {
     errors?.push({ source: "news", message: `No news found for "${question.slice(0, 50)}"`, timestamp: new Date().toISOString() });
   }
-  newsCache.set(cacheKey, { data: rss, expiry: Date.now() + CACHE_TTL });
+  store(rss);
   return rss;
 }
 
