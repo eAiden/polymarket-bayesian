@@ -9,7 +9,7 @@
 //   4. Skip Tavily for markets resolving >21 days out — RSS is sufficient
 
 import { extractKeywords } from "./keywords";
-import { kvGet, kvSetEx } from "./kv";
+import { getNewsCache, setNewsCache } from "./db";
 import type { ScanError } from "./types";
 
 export interface NewsHeadline {
@@ -173,13 +173,12 @@ async function fetchViaRss(question: string): Promise<NewsHeadline[]> {
 
 // ─── Cache + Public API ───────────────────────────────────────────────────────
 // L1: in-memory (fast, lost on restart)
-// L2: Upstash Redis (persists across restarts — survives between daily cron runs)
+// L2: Postgres cache (persists across restarts — survives between daily cron runs)
 // TTL 6 hours — news doesn't change meaningfully within a scan window.
 
 const newsCache = new Map<string, { data: NewsHeadline[]; expiry: number }>();
 const CACHE_TTL_MS  = 6 * 60 * 60 * 1000;  // 6 hours in ms  (L1)
-const CACHE_TTL_SEC = 6 * 60 * 60;          // 6 hours in sec (L2 Redis EX)
-const KV_PREFIX = "news:v1:";
+const CACHE_TTL_SEC = 6 * 60 * 60;          // 6 hours in sec (L2 Postgres)
 
 // Markets resolving >21 days out: Tavily adds little over free RSS.
 // This alone skips ~30-40% of Tavily calls on a typical scan.
@@ -195,18 +194,19 @@ export async function fetchNewsForMarket(question: string, daysUntilResolution =
     return mem.data;
   }
 
-  // L2: Redis hit (survives server restarts)
-  const kvKey = KV_PREFIX + cacheKey;
-  const kvData = await kvGet<NewsHeadline[]>(kvKey);
-  if (kvData) {
-    console.log(`[news] L2 Redis hit for "${question.slice(0, 40)}"`);
-    newsCache.set(cacheKey, { data: kvData, expiry: Date.now() + CACHE_TTL_MS });
-    return kvData;
+  // L2: Postgres cache (survives server restarts)
+  const pgData = await getNewsCache(cacheKey);
+  if (pgData) {
+    console.log(`[news] L2 Postgres cache hit for "${question.slice(0, 40)}"`);
+    newsCache.set(cacheKey, { data: pgData, expiry: Date.now() + CACHE_TTL_MS });
+    return pgData;
   }
 
   const store = (data: NewsHeadline[]) => {
     newsCache.set(cacheKey, { data, expiry: Date.now() + CACHE_TTL_MS });
-    kvSetEx(kvKey, data, CACHE_TTL_SEC);
+    setNewsCache(cacheKey, data, CACHE_TTL_SEC).catch(err =>
+      console.warn("[news] Failed to cache in Postgres:", (err as Error).message)
+    );
   };
 
   // Skip Tavily for far-out markets — RSS is sufficient and free

@@ -3,7 +3,6 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "fs";
 import { join } from "path";
-import { kvSet } from "./kv";
 
 const DATA_DIR = join(process.cwd(), "data");
 const CALIB_FILE = join(DATA_DIR, "calibration.json");
@@ -49,7 +48,6 @@ export function appendCalibrationRecord(record: CalibrationRecord): void {
     const tmp = CALIB_FILE + ".tmp";
     writeFileSync(tmp, JSON.stringify(existing, null, 2), "utf-8");
     renameSync(tmp, CALIB_FILE);
-    kvSet("calibration", existing);
   } catch (err) {
     console.error("[calibration] Failed to save record:", err);
   }

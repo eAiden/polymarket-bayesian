@@ -7,7 +7,6 @@ import { extractSignals, type ExtractionResult } from "./signal-extraction";
 import { computeFeatures } from "./features";
 import { scoreMarket, loadWeights } from "./scoring";
 import { loadCalibrationRecords, computeCategoryBias } from "./calibration";
-import { appendSignalSnapshot } from "./signal-log";
 
 // ─── Convert signal-based result to AnalyzedMarket (backward compat) ────────
 // The UI still expects AnalyzedMarket shape. We map edge score into it,
@@ -144,28 +143,6 @@ export async function analyzeMarkets(
         // Score
         const score = scoreMarket(features, weights);
         console.log(`[score] ${market.question.slice(0, 40)}: edge=${score.edge > 0 ? "+" : ""}${score.edge}pp dir=${score.direction} conf=${score.confidence}`);
-
-        // Ablation baseline score: newsAge × max(0, 1 - daysToResolution/30) × min(1, volumeSpike/3)
-        // Direction is borrowed from full model (we're ablating features, not direction)
-        const baselineScore = features.newsAge
-          * Math.max(0, 1 - features.daysToResolution / 30)
-          * Math.min(1, features.volumeSpike / 3);
-
-        // Log signal snapshot for training / ablation comparison
-        try {
-          appendSignalSnapshot(
-            market.id,
-            market.yesProbPct,
-            triggerType,
-            signal,
-            features,
-            score,
-            weights.version,
-            baselineScore,
-          );
-        } catch (err) {
-          console.warn(`[analysis] Failed to log snapshot for ${market.id}:`, (err as Error).message);
-        }
 
         // Convert to AnalyzedMarket for UI compatibility
         const result = buildResultFromScore(extraction, score.edge, score.confidence, score.direction, score.topContributors, triggerType);

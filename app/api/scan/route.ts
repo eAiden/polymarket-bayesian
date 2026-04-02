@@ -1,63 +1,30 @@
+import { NextResponse } from "next/server";
 import { runScanPipeline } from "@/lib/pipeline";
-import type { ScanEvent } from "@/lib/types";
+import type { ScanProgressCallback } from "@/lib/pipeline";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 360; // 6 minutes for AI + news fetching
+export const maxDuration = 300;
 
 export async function POST() {
   const encoder = new TextEncoder();
+  const stream = new TransformStream();
+  const writer = stream.writable.getWriter();
 
-  // When PIPELINE_SERVICE_URL is set (Vercel), proxy the SSE stream to Railway.
-  const pipelineUrl = process.env.PIPELINE_SERVICE_URL;
-  if (pipelineUrl) {
-    const adminSecret = process.env.ADMIN_SECRET ?? "";
-    const upstream = await fetch(`${pipelineUrl}/admin/scan`, {
-      method: "POST",
-      headers: adminSecret ? { Authorization: `Bearer ${adminSecret}` } : {},
-    });
+  const send: ScanProgressCallback = (event) => {
+    const data = `data: ${JSON.stringify(event)}\n\n`;
+    writer.write(encoder.encode(data)).catch(() => {});
+  };
 
-    if (!upstream.ok || !upstream.body) {
-      const err = await upstream.text().catch(() => "Upstream error");
-      return new Response(
-        `data: ${JSON.stringify({ phase: "error", message: err })}\n\n`,
-        { status: 200, headers: { "Content-Type": "text/event-stream" } },
-      );
-    }
+  runScanPipeline(send)
+    .catch((err) => send({ phase: "error", message: (err as Error).message }))
+    .finally(() => writer.close().catch(() => {}));
 
-    // Pipe Railway's SSE response directly to the client
-    return new Response(upstream.body, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive",
-      },
-    });
-  }
-
-  // No PIPELINE_SERVICE_URL — run locally (dev / Railway direct deploy)
-  const stream = new ReadableStream({
-    async start(controller) {
-      function send(event: ScanEvent) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-      }
-
-      try {
-        await runScanPipeline(send);
-      } catch (err) {
-        const msg = (err as Error).message || "Scan failed";
-        console.error("[POST /api/scan]", err);
-        send({ phase: "error", message: msg });
-      } finally {
-        controller.close();
-      }
-    },
-  });
-
-  return new Response(stream, {
+  return new Response(stream.readable, {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
     },
   });
 }

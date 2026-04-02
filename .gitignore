@@ -2,17 +2,20 @@
 node_modules/
 
 # Data files — persisted by Railway/KV, not tracked in git
-data/markets.json
-data/paper-trading.json
-data/signal-log.json
-data/calibration.json
-data/model-weights.json
-data/waitlist.csv
+data/*.json
+data/*.csv
 data/*.lock
+
+# Build artifacts
+tsconfig.tsbuildinfo
+
+# Local dev helpers
+dev.sh
 
 # Secrets
 .env.local
 .env*.local
 
-# Gstack metadata
+# Local tooling (machine-specific paths)
 .gstack/
+.claude/

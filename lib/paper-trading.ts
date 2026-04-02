@@ -3,7 +3,6 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "fs";
 import { join } from "path";
-import { kvGet, kvSet } from "./kv";
 
 const DATA_DIR = join(process.cwd(), "data");
 const PT_FILE = join(DATA_DIR, "paper-trading.json");
@@ -83,12 +82,9 @@ function savePaperTrading(state: PaperTradingState): void {
   const tmp = PT_FILE + ".tmp";
   writeFileSync(tmp, JSON.stringify(state, null, 2), "utf-8");
   renameSync(tmp, PT_FILE);
-  kvSet("paper-trading", state);
 }
 
 export async function loadPaperTradingAsync(): Promise<PaperTradingState> {
-  const kvState = await kvGet<PaperTradingState>("paper-trading");
-  if (kvState) return kvState;
   return loadPaperTrading();
 }
 

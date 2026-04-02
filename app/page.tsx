@@ -1,4 +1,4 @@
-import { loadStoreAsync } from "@/lib/storage";
+import { getMarketStore } from "@/lib/db";
 import { Dashboard } from "@/components/Dashboard";
 import Link from "next/link";
 
@@ -7,7 +7,7 @@ export const revalidate = 3600;
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  const store = await loadStoreAsync();
+  const store = await getMarketStore();
   return (
     <>
       <nav style={{

@@ -1,14 +1,14 @@
 import { NextResponse } from "next/server";
-import { loadStoreAsync } from "@/lib/storage";
+import { getMarketStore } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const store = await loadStoreAsync();
+    const store = await getMarketStore();
     return NextResponse.json(store);
   } catch (err) {
-    console.error("[GET /api/markets]", err);
-    return NextResponse.json({ error: "Failed to load market data" }, { status: 500 });
+    console.error("[api/markets]", err);
+    return NextResponse.json({ lastScanAt: null, markets: [] }, { status: 500 });
   }
 }

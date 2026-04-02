@@ -1,15 +1,17 @@
-// Shared scan pipeline — used by both /api/scan and the daily cron scheduler.
-// Also exports fast re-analysis for news-triggered updates.
+// Orchestrates the full scan pipeline using DB-backed approach.
+// Replaces the old file + KV approach.
+
 import type { ScanEvent, ScanError } from "./types";
-import { fetchFilteredMarkets } from "./polymarket";
-import { analyzeMarkets } from "./analysis";
-import { loadStore, mergeNewAnalysis, updatePricesOnly, saveStore, acquireScanLock, releaseScanLock } from "./storage";
-import { appendSignalSnapshot } from "./signal-log";
-import { openPosition, updatePosition } from "./paper-trading";
-import { extractSignals, fetchEnrichment } from "./signal-extraction";
-import { computeFeatures } from "./features";
-import { scoreMarket, loadWeights } from "./scoring";
-import { loadCalibrationRecords, computeCategoryBias } from "./calibration";
+import { fetchFilteredMarkets, fetchMarketPrice } from "./polymarket";
+import {
+  acquireScanLock, releaseScanLock, upsertMarket,
+  insertSignal, appendPriceHistory, touchMarketScan,
+  getMarketStore, openTrade, getOpenTrades, closeTrade,
+  updateMarketPrice,
+} from "./db";
+import { signalsToLikelihoodRatio, bayesianUpdate, credibleInterval } from "./bayesian";
+import { fetchEnrichment, extractSignalsBatch } from "./signal-extraction";
+import { processResolvedMarkets } from "./resolution";
 import type { MarketEnrichment } from "./types";
 
 export type ScanProgressCallback = (event: ScanEvent) => void;
@@ -21,203 +23,253 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 }> {
   const emit = onProgress ?? (() => {});
 
-  // File-based lock — survives server restarts
-  const lock = acquireScanLock();
-  if (!lock.acquired) {
-    emit({ phase: "error", message: lock.reason });
-    throw new Error(lock.reason ?? "Scan already in progress. Please wait.");
+  // Acquire Postgres advisory lock
+  const acquired = await acquireScanLock();
+  if (!acquired) {
+    const msg = "Scan already in progress. Please wait.";
+    emit({ phase: "error", message: msg });
+    throw new Error(msg);
   }
 
   try {
     const scanErrors: ScanError[] = [];
 
-    emit({ phase: "fetching", message: "Fetching Polymarket markets (20-80%, ≤30 days)..." });
-    console.log("[pipeline] Fetching Polymarket markets (20-80%, ≤30 days)...");
+    // 1. Process resolutions first
+    emit({ phase: "fetching", message: "Checking for resolved markets..." });
+    try {
+      const resResult = await processResolvedMarkets();
+      if (resResult.resolved > 0) {
+        console.log(`[pipeline] Resolved ${resResult.resolved} markets`);
+      }
+    } catch (err) {
+      console.error("[pipeline] Resolution check failed:", err);
+    }
+
+    // 2. Fetch markets
+    emit({ phase: "fetching", message: "Fetching Polymarket markets (10-90%, ≤90 days)..." });
+    console.log("[pipeline] Fetching Polymarket markets...");
     const filtered = await fetchFilteredMarkets(scanErrors);
     console.log(`[pipeline] Found ${filtered.length} qualifying markets`);
     emit({ phase: "fetching", message: `Found ${filtered.length} qualifying markets`, total: filtered.length });
 
     if (filtered.length === 0) {
-      const store = loadStore();
-      const updated = await updatePricesOnly(store);
-      saveStore(updated);
-      const result = { marketsScanned: 0, analyzed: 0, totalTracked: updated.markets.length };
+      const store = await getMarketStore();
+      const result = { marketsScanned: 0, analyzed: 0, totalTracked: store.markets.length };
       emit({ phase: "done", result });
       return result;
     }
 
-    // Load existing market history for price trend context
-    const existingStore = loadStore();
+    // 3. Upsert all markets
+    await Promise.all(filtered.map(m => upsertMarket(m)));
+
+    // 4. Load existing price history for context
+    const store = await getMarketStore();
     const existingHistoryMap = new Map(
-      existingStore.markets.map(m => [m.id, m.history])
+      store.markets.map(m => [m.id, m.history])
     );
 
-    emit({ phase: "analyzing", current: 0, total: filtered.length, message: "Starting signal extraction via Claude..." });
-    console.log("[pipeline] Running signal extraction + scoring...");
+    emit({ phase: "analyzing", current: 0, total: filtered.length, message: "Fetching enrichment data..." });
 
-    const analyzed = await analyzeMarkets(filtered, (current, market) => {
+    // 5. Fetch enrichment per market (orderbook, FRED, crypto) concurrently
+    const enrichmentMap = new Map<string, MarketEnrichment>();
+    const ENRICHMENT_CONCURRENCY = 5;
+    for (let i = 0; i < filtered.length; i += ENRICHMENT_CONCURRENCY) {
+      const batch = filtered.slice(i, i + ENRICHMENT_CONCURRENCY);
+      await Promise.all(batch.map(async m => {
+        const history = existingHistoryMap.get(m.id);
+        const enrichment = await fetchEnrichment(m, history);
+        enrichmentMap.set(m.id, enrichment);
+      }));
+    }
+
+    emit({ phase: "analyzing", current: 0, total: filtered.length, message: "Running batched Claude analysis..." });
+    console.log(`[pipeline] Running batched signal extraction (${filtered.length} markets, 10/batch)...`);
+
+    // 6. Extract signals in batches of 10
+    const signalResults = await extractSignalsBatch(filtered, enrichmentMap, scanErrors);
+    console.log(`[pipeline] Got ${signalResults.size} signal results`);
+
+    let analyzed = 0;
+
+    // 7. Process each signal result
+    for (const market of filtered) {
+      const result = signalResults.get(market.id);
+      if (!result) continue;
+
+      // Compute Bayesian posterior
+      const lr = signalsToLikelihoodRatio(result.signal.newsSignals);
+      const posteriorProb = bayesianUpdate(market.yesProbPct, lr);
+      const edgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
+      const ci = credibleInterval(posteriorProb, result.signal.newsSignals.length);
+
+      const direction = edgePct >= 0 ? "YES" : "NO";
+      const absEdge = Math.abs(edgePct);
+      const confidence = absEdge >= 10 ? "high" : absEdge >= 5 ? "medium" : "low";
+
+      // Insert signal
+      await insertSignal({
+        marketId: market.id,
+        priorProb: market.yesProbPct,
+        posteriorProb,
+        likelihoodRatio: lr,
+        edgePct,
+        direction,
+        confidence,
+        reasoning: result.reasoning,
+        keyFactors: result.keyFactors,
+        newsSignals: result.signal.newsSignals,
+        newsAge: result.newsAge,
+        topFact: result.topFact,
+        sources: result.sources,
+        triggerType: "full_scan",
+      });
+
+      // Append price history
+      await appendPriceHistory(market.id, market.yesProbPct, posteriorProb);
+
+      // Touch last_scan_at
+      await touchMarketScan(market.id);
+
+      // Paper trading: open position if edge is actionable
+      if (absEdge >= 5 && confidence !== "low") {
+        const openTrades = await getOpenTrades();
+        const alreadyOpen = openTrades.some(t => t.marketId === market.id);
+        if (!alreadyOpen) {
+          await openTrade({
+            marketId: market.id,
+            direction,
+            entryProb: market.yesProbPct,
+            entryEdge: edgePct,
+            sizeUsd: 10, // fixed $10 paper trade for simplicity
+          });
+          console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp)`);
+        }
+      }
+
+      analyzed++;
       emit({
         phase: "analyzing",
-        current,
+        current: analyzed,
         total: filtered.length,
-        market: market.slice(0, 60),
-        message: `Analyzing market ${current}/${filtered.length}`,
+        market: market.question.slice(0, 60),
+        message: `Analyzed ${analyzed}/${filtered.length}`,
       });
-    }, scanErrors, existingHistoryMap);
-    console.log(`[pipeline] Scoring complete: ${analyzed.length} markets with edge`);
 
-    emit({ phase: "consistency", message: `Analysis complete. ${analyzed.length} markets with actionable edge.` });
+      void ci; // credible interval available but not stored in this schema version
+    }
 
-    // Update existing positions + open new ones for new edges
-    for (const m of analyzed) {
-      const conf = m.confidence ?? "low";
+    // 8. Update prices for markets NOT in this scan
+    const scannedIds = new Set(filtered.map(m => m.id));
+    const trackedStore = await getMarketStore();
+    const unscanned = trackedStore.markets.filter(m => !scannedIds.has(m.id) && !m.resolved);
 
-      // First, update any existing open position (triggers stop-loss/take-profit/edge-decay)
-      const posUpdate = updatePosition(m.id, m.marketProb, m.edge, conf, m.topFact);
-      if (posUpdate.action === "stopped") {
-        console.log(`[pipeline] Position stopped on "${m.title.slice(0, 40)}": ${posUpdate.reason}`);
-      }
+    if (unscanned.length > 0) {
+      emit({ phase: "saving", message: `Updating prices for ${unscanned.length} other tracked markets...` });
+      console.log(`[pipeline] Updating prices for ${unscanned.length} other tracked markets...`);
 
-      // Open new position if no existing one and edge is strong enough
-      if (posUpdate.action === "none" && conf !== "low" && Math.abs(m.edge) >= 5) {
-        openPosition(m.id, m.title, m.direction, m.marketProb, m.edge, conf);
+      const PRICE_BATCH = 5;
+      for (let i = 0; i < unscanned.length; i += PRICE_BATCH) {
+        const batch = unscanned.slice(i, i + PRICE_BATCH);
+        await Promise.allSettled(batch.map(async m => {
+          const price = await fetchMarketPrice(m.id);
+          if (price !== null) {
+            await updateMarketPrice(m.id, price);
+            await appendPriceHistory(m.id, price);
+          }
+        }));
+        if (i + PRICE_BATCH < unscanned.length) {
+          await new Promise(r => setTimeout(r, 200));
+        }
       }
     }
 
-    // Reload store (may have changed during scan) and merge
-    const freshStore = loadStore();
-    const merged = mergeNewAnalysis(freshStore, analyzed);
-
-    // Update prices for tracked markets not covered in this scan
-    const analyzedIds = new Set(analyzed.map((m) => m.id));
-    const notScanned = {
-      ...merged,
-      markets: merged.markets.filter((m) => !analyzedIds.has(m.id)),
+    const finalStore = await getMarketStore();
+    const result = {
+      marketsScanned: filtered.length,
+      analyzed,
+      totalTracked: finalStore.markets.length,
     };
 
-    let finalStore = merged;
-    if (notScanned.markets.length > 0) {
-      emit({ phase: "saving", message: `Updating prices for ${notScanned.markets.length} other tracked markets...` });
-      console.log(`[pipeline] Updating prices for ${notScanned.markets.length} other tracked markets...`);
-      const priceUpdated = await updatePricesOnly(notScanned);
-      const updatedMap = new Map(priceUpdated.markets.map((m) => [m.id, m]));
-      finalStore = {
-        ...merged,
-        markets: merged.markets.map((m) => updatedMap.get(m.id) ?? m),
-      };
-    }
-
-    // Persist scan health errors (last scan only)
-    finalStore.scanHealth = scanErrors.length > 0 ? scanErrors : undefined;
-    saveStore(finalStore);
     if (scanErrors.length > 0) {
-      console.log(`[pipeline] Scan completed with ${scanErrors.length} warnings:`, scanErrors.map(e => `${e.source}: ${e.message}`).join("; "));
+      console.log(`[pipeline] Scan completed with ${scanErrors.length} warnings:`,
+        scanErrors.map(e => `${e.source}: ${e.message}`).join("; "));
     }
     console.log(`[pipeline] Done. Tracking ${finalStore.markets.length} markets total.`);
 
-    const result = {
-      marketsScanned: filtered.length,
-      analyzed: analyzed.length,
-      totalTracked: finalStore.markets.length,
-    };
     emit({ phase: "done", result });
     return result;
   } finally {
-    releaseScanLock();
+    await releaseScanLock();
   }
 }
 
-// ─── Fast re-analysis for news-triggered updates ────────────────────────────
-// No market discovery, no consistency check. Just: extract → score → save.
-// Target: <30s per market.
+// ─── Fast re-analysis for news-triggered updates ──────────────────────────────
 
-export async function runFastReanalysis(
-  marketIds: string[],
-): Promise<{ marketsReanalyzed: number }> {
-  const store = loadStore();
-  const scanErrors: ScanError[] = [];
+export async function reanalyzeMarket(marketId: string): Promise<void> {
+  const store = await getMarketStore();
+  const tracked = store.markets.find(m => m.id === marketId);
+  if (!tracked || tracked.resolved) return;
 
-  // Load calibration bias
-  const calibRecords = loadCalibrationRecords();
-  const categoryBiasMap = new Map<string, MarketEnrichment["calibrationBias"]>();
-  for (const cat of ["Crypto", "Politics", "Sports", "Economics", "Science", "Other"]) {
-    const bias = computeCategoryBias(calibRecords, cat);
-    if (bias) categoryBiasMap.set(cat, bias);
-  }
+  const market = {
+    id: tracked.id,
+    question: tracked.title,
+    description: undefined as string | undefined,
+    resolutionSource: undefined as string | undefined,
+    url: tracked.url,
+    category: tracked.category,
+    yesProbPct: tracked.marketProb,
+    volume: tracked.volume,
+    endDate: tracked.endDate,
+    endDateIso: tracked.endDateIso ?? "",
+    daysUntilResolution: tracked.daysUntilResolution,
+  };
 
-  const weights = loadWeights();
-  let reanalyzed = 0;
+  const enrichment = await fetchEnrichment(market, tracked.history);
+  const errors: ScanError[] = [];
+  const batchResults = await extractSignalsBatch([market], new Map([[market.id, enrichment]]), errors);
+  const result = batchResults.get(marketId);
+  if (!result) return;
 
+  const lr = signalsToLikelihoodRatio(result.signal.newsSignals);
+  const posteriorProb = bayesianUpdate(market.yesProbPct, lr);
+  const edgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
+  const direction = edgePct >= 0 ? "YES" : "NO";
+  const absEdge = Math.abs(edgePct);
+  const confidence = absEdge >= 10 ? "high" : absEdge >= 5 ? "medium" : "low";
+
+  await insertSignal({
+    marketId,
+    priorProb: market.yesProbPct,
+    posteriorProb,
+    likelihoodRatio: lr,
+    edgePct,
+    direction,
+    confidence,
+    reasoning: result.reasoning,
+    keyFactors: result.keyFactors,
+    newsSignals: result.signal.newsSignals,
+    newsAge: result.newsAge,
+    topFact: result.topFact,
+    sources: result.sources,
+    triggerType: "news_triggered",
+  });
+
+  await appendPriceHistory(marketId, market.yesProbPct, posteriorProb);
+  await touchMarketScan(marketId);
+
+  console.log(`[reanalyze] ${market.question.slice(0, 40)}: edge=${edgePct > 0 ? "+" : ""}${edgePct}pp (lr=${lr.toFixed(2)})`);
+}
+
+// Keep old name for news-monitor compat
+export async function runFastReanalysis(marketIds: string[]): Promise<{ marketsReanalyzed: number }> {
+  let marketsReanalyzed = 0;
   for (const id of marketIds) {
-    const tracked = store.markets.find(m => m.id === id);
-    if (!tracked || tracked.resolved) continue;
-
-    // Build a FilteredMarket-like object from TrackedMarket
-    const market = {
-      id: tracked.id,
-      question: tracked.title,
-      description: undefined as string | undefined,
-      resolutionSource: undefined as string | undefined,
-      url: tracked.url,
-      category: tracked.category,
-      yesProbPct: tracked.marketProb,
-      volume: tracked.volume,
-      endDate: tracked.endDate,
-      endDateIso: tracked.endDateIso ?? "",
-      daysUntilResolution: tracked.daysUntilResolution,
-    };
-
-    const result = await extractSignals(market, scanErrors, tracked.history, categoryBiasMap);
-    if (!result) continue;
-
-    const catBias = categoryBiasMap.get(market.category)?.avgEdgeBias ?? 0;
-    const features = computeFeatures(result.signal, market.yesProbPct, result.enrichment, result.crossMatches, catBias);
-    const score = scoreMarket(features, weights);
-
-    // Ablation baseline score (same formula as analyzeMarkets)
-    const baselineScore = features.newsAge
-      * Math.max(0, 1 - features.daysToResolution / 30)
-      * Math.min(1, features.volumeSpike / 3);
-
-    // Log signal snapshot
-    appendSignalSnapshot(
-      market.id, market.yesProbPct, "news_triggered",
-      result.signal, features, score, weights.version, baselineScore,
-    );
-
-    // Top fact: strongest signal aligned with direction, else first signal
-    const mappedDir = score.direction === "YES" || score.direction === "NO" ? score.direction : (score.edge >= 0 ? "YES" : "NO") as "YES" | "NO";
-    const topFact =
-      result.signal.newsSignals.find(s => s.direction === mappedDir && s.strength === "strong")?.fact ??
-      result.signal.newsSignals.find(s => s.direction === mappedDir)?.fact ??
-      result.signal.newsSignals[0]?.fact;
-
-    // Update tracked market with new score
-    tracked.edge = score.edge;
-    tracked.fairProb = Math.max(1, Math.min(99, Math.round(market.yesProbPct + score.edge)));
-    tracked.confidence = score.confidence;
-    tracked.confidenceInterval = undefined;
-    tracked.lastUpdated = new Date().toISOString();
-
-    // Update existing position (checks stop-loss, take-profit, edge decay)
-    const posUpdate = updatePosition(market.id, market.yesProbPct, score.edge, score.confidence, topFact);
-    if (posUpdate.action === "stopped") {
-      console.log(`[fast-reanalysis] Position stopped: ${posUpdate.reason}`);
+    try {
+      await reanalyzeMarket(id);
+      marketsReanalyzed++;
+    } catch (err) {
+      console.error(`[fast-reanalysis] Error for market ${id}:`, err);
     }
-
-    // Open paper position if warranted (only if no existing open position)
-    if (posUpdate.action === "none" && score.confidence !== "low" && Math.abs(score.edge) >= 5) {
-      const dir = score.direction === "YES" ? "YES" as const : "NO" as const;
-      openPosition(market.id, market.question, dir, market.yesProbPct, score.edge, score.confidence);
-    }
-
-    reanalyzed++;
-    console.log(`[fast-reanalysis] ${market.question.slice(0, 40)}: edge=${score.edge > 0 ? "+" : ""}${score.edge}pp`);
   }
-
-  if (reanalyzed > 0) {
-    saveStore(store);
-  }
-
-  return { marketsReanalyzed: reanalyzed };
+  return { marketsReanalyzed };
 }

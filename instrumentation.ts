@@ -1,39 +1,34 @@
 // Next.js instrumentation hook — runs once on server startup.
-// Schedules:
-//   1. Daily full scan at 08:00 local time
-//   2. News monitor every 5 minutes (checks for breaking news → fast re-analysis)
+// Runs DB migration, then schedules:
+//   1. Daily full scan at 08:00
+//   2. News monitor every 5 minutes
 
 export async function register() {
-  // Skip cron on Vercel — Railway handles the pipeline when PIPELINE_SERVICE_URL is set.
-  if (process.env.NEXT_RUNTIME === "nodejs" && !process.env.PIPELINE_SERVICE_URL) {
-    const cron = await import("node-cron");
-    const { runScanPipeline } = await import("./lib/pipeline");
-    const { runNewsMonitor } = await import("./lib/news-monitor");
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
-    console.log("[scheduler] Daily scan scheduled at 08:00 local time");
-    console.log("[scheduler] News monitor scheduled every 5 minutes");
+  const { migrate } = await import("./lib/db");
+  const { schedule } = await import("node-cron");
+  const { runScanPipeline } = await import("./lib/pipeline");
+  const { runNewsMonitor } = await import("./lib/news-monitor");
 
-    // Full scan: daily at 8am
-    cron.default.schedule("0 8 * * *", async () => {
-      console.log("[scheduler] Running daily scan...");
-      try {
-        const result = await runScanPipeline();
-        console.log("[scheduler] Daily scan complete:", result);
-      } catch (err) {
-        console.error("[scheduler] Daily scan failed:", err);
-      }
-    });
-
-    // News monitor: every 5 minutes
-    cron.default.schedule("*/5 * * * *", async () => {
-      try {
-        const result = await runNewsMonitor();
-        if (result.alertsFound > 0) {
-          console.log(`[scheduler] News monitor: ${result.alertsFound} alerts, ${result.marketsReanalyzed} re-analyzed`);
-        }
-      } catch (err) {
-        console.error("[scheduler] News monitor failed:", err);
-      }
-    });
+  // Run DB migration on startup
+  try {
+    await migrate();
+    console.log("[db] Migration complete");
+  } catch (err) {
+    console.error("[db] Migration failed:", err);
   }
+
+  // Daily scan at 8am
+  schedule("0 8 * * *", async () => {
+    console.log("[cron] Running daily scan...");
+    try { await runScanPipeline(); } catch (err) { console.error("[cron]", err); }
+  });
+
+  // News monitor every 5 minutes
+  schedule("*/5 * * * *", async () => {
+    try { await runNewsMonitor(); } catch (err) { console.error("[cron] news:", err); }
+  });
+
+  console.log("[cron] Scheduled: daily scan @ 08:00, news monitor every 5min");
 }

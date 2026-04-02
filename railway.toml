@@ -2,9 +2,8 @@
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "npx tsx server/index.ts"
-healthcheckPath = "/health"
-healthcheckTimeout = 30
+startCommand = "npm start"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
-
