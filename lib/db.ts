@@ -300,8 +300,13 @@ export async function appendPriceHistory(marketId: string, marketProb: number, f
 export async function getMarketStore(): Promise<MarketStore> {
   const db = sql();
 
-  // Fetch all markets
-  const markets = await db`SELECT * FROM markets ORDER BY last_updated DESC`;
+  // Fetch all markets — if tables don't exist yet (pre-migration), return empty store
+  let markets: postgres.RowList<postgres.Row[]>;
+  try {
+    markets = await db`SELECT * FROM markets ORDER BY last_updated DESC`;
+  } catch {
+    return { lastScanAt: null, markets: [] };
+  }
 
   if (markets.length === 0) {
     return { lastScanAt: null, markets: [] };

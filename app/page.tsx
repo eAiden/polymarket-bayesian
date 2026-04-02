@@ -1,13 +1,21 @@
 import { getMarketStore } from "@/lib/db";
 import { Dashboard } from "@/components/Dashboard";
 import Link from "next/link";
+import type { MarketStore } from "@/lib/types";
 
 // Re-render from cache every hour; manual scans trigger client-side polls
 export const revalidate = 3600;
 export const dynamic = "force-dynamic";
 
+const emptyStore: MarketStore = { lastScanAt: null, markets: [] };
+
 export default async function Home() {
-  const store = await getMarketStore();
+  let store: MarketStore = emptyStore;
+  try {
+    store = await getMarketStore();
+  } catch (err) {
+    console.error("[page] getMarketStore failed:", err);
+  }
   return (
     <>
       <nav style={{
