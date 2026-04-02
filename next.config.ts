@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["node-cron", "postgres", "@anthropic-ai/sdk"],
   webpack: (config, { isServer }) => {
     if (!isServer) {
       // Node.js built-ins used in server-only lib files — stub them out for the client bundle
