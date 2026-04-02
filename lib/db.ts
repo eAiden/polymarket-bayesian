@@ -233,7 +233,7 @@ export async function insertSignal(s: {
     ) VALUES (
       ${s.marketId}, ${s.priorProb}, ${s.posteriorProb}, ${s.likelihoodRatio}, ${s.edgePct},
       ${s.direction}, ${s.confidence}, ${s.reasoning},
-      ${JSON.stringify(s.keyFactors)}, ${JSON.stringify(s.newsSignals)},
+      ${JSON.stringify(s.keyFactors)}::jsonb, ${JSON.stringify(s.newsSignals)}::jsonb,
       ${s.newsAge}, ${s.topFact ?? null}, ${s.sources}, ${s.triggerType}
     )
     RETURNING id
@@ -269,8 +269,22 @@ export async function getLatestSignal(marketId: string): Promise<{
     direction: r.direction as string,
     confidence: r.confidence as string,
     reasoning: r.reasoning as string,
-    keyFactors: r.key_factors as { bullish: string[]; bearish: string[] },
-    newsSignals: r.news_signals as unknown[],
+    keyFactors: (() => {
+      const raw = r.key_factors;
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        const kf = raw as Record<string, unknown>;
+        return {
+          bullish: Array.isArray(kf.bullish) ? kf.bullish as string[] : [],
+          bearish: Array.isArray(kf.bearish) ? kf.bearish as string[] : [],
+        };
+      }
+      return { bullish: [], bearish: [] };
+    })(),
+    newsSignals: (() => {
+      const raw = r.news_signals;
+      if (typeof raw === "string") { try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch { return []; } }
+      return Array.isArray(raw) ? raw as unknown[] : [];
+    })(),
     newsAge: r.news_age as string,
     topFact: r.top_fact as string | null,
     sources: r.sources as string[],
