@@ -9,6 +9,21 @@ export const dynamic = "force-dynamic";
 
 const loadPaperTradingAsync = getPaperTradingState;
 
+// ─── Design tokens (mirrors globals.css Operator theme) ───────────────────────
+const T = {
+  bg:      "#0d1117",
+  surface: "#161b22",
+  border:  "#21262d",
+  text:    "#e6edf3",
+  muted:   "#8b949e",
+  dim:     "#484f58",
+  green:   "#3fb950",
+  red:     "#f85149",
+  accent:  "#10b981",
+  yellow:  "#e3b341",
+  sans:    "Inter, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif",
+  mono:    "ui-monospace, 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace",
+} as const;
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 
@@ -33,8 +48,6 @@ function fmtDate(iso?: string): string {
 }
 
 // ─── Equity curve SVG ────────────────────────────────────────────────────────
-// y = -cumulativePnl so gains go upward in visual space.
-// ViewBox: "0 -(maxGain+10) (N+1) (maxGain+maxLoss+20)"
 
 function EquityCurve({ positions }: { positions: PaperPosition[] }) {
   const settled = positions
@@ -44,15 +57,14 @@ function EquityCurve({ positions }: { positions: PaperPosition[] }) {
   if (settled.length === 0) {
     return (
       <svg viewBox="0 -10 100 30" preserveAspectRatio="none" style={{ width: "100%", height: "120px", display: "block" }}>
-        <line x1="0" y1="0" x2="100" y2="0" stroke="#333" strokeWidth="1" />
-        <text x="50" y="-3" textAnchor="middle" fill="#666" fontSize="3" fontFamily="monospace">
+        <line x1="0" y1="0" x2="100" y2="0" stroke={T.border} strokeWidth="1" />
+        <text x="50" y="-3" textAnchor="middle" fill={T.dim} fontSize="3" fontFamily={T.sans}>
           No closed positions yet — check back soon.
         </text>
       </svg>
     );
   }
 
-  // Build cumulative P&L series
   const points: Array<{ x: number; y: number; cum: number }> = [{ x: 0, y: 0, cum: 0 }];
   let cum = 0;
   for (let i = 0; i < settled.length; i++) {
@@ -64,44 +76,58 @@ function EquityCurve({ positions }: { positions: PaperPosition[] }) {
   const maxLoss = Math.max(0, ...points.map(p => -p.cum));
   const N = settled.length;
   const viewBox = `0 ${-(maxGain + 10)} ${N + 1} ${maxGain + maxLoss + 20}`;
-
   const polyline = points.map(p => `${p.x},${p.y}`).join(" ");
-
-  // Zero line y position in this coordinate system
-  const zeroY = 0;
+  const last = points[points.length - 1];
+  const label = `${last.cum >= 0 ? "+" : ""}$${Math.abs(last.cum).toFixed(0)}`;
 
   return (
     <svg viewBox={viewBox} preserveAspectRatio="none" style={{ width: "100%", height: "160px", display: "block" }}>
-      {/* Zero baseline */}
-      <line x1="0" y1={zeroY} x2={N + 1} y2={zeroY} stroke="#333" strokeWidth="0.5" strokeDasharray="2,2" />
-      {/* Equity curve */}
+      <line x1="0" y1="0" x2={N + 1} y2="0" stroke={T.border} strokeWidth="0.5" strokeDasharray="2,2" />
       <polyline
         points={polyline}
         fill="none"
-        stroke="#1a7a40"
+        stroke={T.accent}
         strokeWidth={Math.max(0.4, (N + 1) / 300)}
         strokeLinejoin="round"
         strokeLinecap="round"
         vectorEffect="non-scaling-stroke"
       />
-      {/* Final value label */}
-      {points.length > 1 && (() => {
-        const last = points[points.length - 1];
-        const label = `${last.cum >= 0 ? "+" : ""}$${Math.abs(last.cum).toFixed(0)}`;
-        return (
-          <text
-            x={last.x}
-            y={last.y - 2}
-            textAnchor={last.x > N * 0.8 ? "end" : "start"}
-            fill={last.cum >= 0 ? "#4ade80" : "#f87171"}
-            fontSize={Math.max(1.5, (maxGain + maxLoss) / 15)}
-            fontFamily="monospace"
-          >{label}</text>
-        );
-      })()}
+      {points.length > 1 && (
+        <text
+          x={last.x}
+          y={last.y - 2}
+          textAnchor={last.x > N * 0.8 ? "end" : "start"}
+          fill={last.cum >= 0 ? T.green : T.red}
+          fontSize={Math.max(1.5, (maxGain + maxLoss) / 15)}
+          fontFamily={T.mono}
+        >{label}</text>
+      )}
     </svg>
   );
 }
+
+// ─── Shared style helpers ─────────────────────────────────────────────────────
+
+const card: React.CSSProperties = {
+  background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+};
+
+const thStyle: React.CSSProperties = {
+  textAlign: "left", padding: "6px 10px", fontWeight: 600,
+  fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em",
+  color: T.muted, fontFamily: T.sans, whiteSpace: "nowrap",
+};
+
+const tdStyle: React.CSSProperties = {
+  padding: "10px 10px", borderBottom: `1px solid rgba(255,255,255,0.04)`,
+  verticalAlign: "middle", fontFamily: T.mono, whiteSpace: "nowrap",
+};
+
+const sectionHeading: React.CSSProperties = {
+  fontSize: 13, fontWeight: 700, marginBottom: 14, color: T.text,
+  letterSpacing: "-0.1px", fontFamily: T.sans,
+  textTransform: "uppercase", letterSpacing: "0.06em",
+};
 
 // ─── Page component ───────────────────────────────────────────────────────────
 
@@ -120,57 +146,63 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
   const pnlPct = bankroll > 0 ? totalPnl / bankroll : 0;
   const settled = positions.filter(p => p.status === "closed" || p.status === "stopped");
 
+  const stats = [
+    { label: "Realized P&L",   value: fmt$(totalPnl),      color: totalPnl >= 0 ? T.green : T.red },
+    { label: "Return",          value: fmtPct(pnlPct),      color: pnlPct >= 0 ? T.green : T.red },
+    { label: "Unrealized P&L", value: fmt$(unrealizedPnl),  color: unrealizedPnl >= 0 ? T.green : T.red },
+    { label: "Win Rate",        value: settled.length > 0 ? `${(winRate * 100).toFixed(0)}%` : "—", color: T.text },
+    { label: "Max Drawdown",    value: maxDrawdown > 0 ? `-${(maxDrawdown * 100).toFixed(1)}%` : "0%", color: maxDrawdown > 0.1 ? T.red : T.text },
+    { label: "Positions",       value: `${open.length} open / ${settled.length} closed`, color: T.muted },
+  ];
+
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 20px 80px", fontFamily: "ui-monospace, Menlo, Consolas, monospace", fontSize: 13, color: "#e0e0e0", background: "#0a0a0a", minHeight: "100vh" }}>
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "32px 20px 80px", fontFamily: T.sans, fontSize: 13, color: T.text, background: T.bg, minHeight: "100vh" }}>
+
+      {/* Google Fonts — same as dashboard */}
+      {/* eslint-disable-next-line @next/next/no-page-custom-font */}
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');`}</style>
 
       {/* Header */}
       <div style={{ marginBottom: 32 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: "-0.5px" }}>
-            Polymarket Signal Leaderboard
+          <h1 style={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.4px", fontFamily: T.sans }}>
+            Polymarket Signal — Leaderboard
           </h1>
           <Link
             href="/"
             style={{
-              fontSize: 11, color: "#666",
-              background: "#111", border: "1px solid #222",
-              borderRadius: 5, padding: "4px 10px",
-              textDecoration: "none",
+              fontSize: 11, color: T.muted, fontWeight: 500,
+              background: T.surface, border: `1px solid ${T.border}`,
+              borderRadius: 6, padding: "4px 10px",
+              textDecoration: "none", fontFamily: T.sans,
             }}
           >
             ← Dashboard
           </Link>
         </div>
-        <p style={{ color: "#666", fontSize: 12 }}>
+        <p style={{ color: T.muted, fontSize: 12, lineHeight: 1.6 }}>
           Paper trading P&L — hypothetical positions taken on detected mispricings. No real money.
           Every trade shown, including losers.
         </p>
       </div>
 
       {/* Stats bar */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 28 }}>
-        {[
-          { label: "Realized P&L", value: fmt$(totalPnl), color: totalPnl >= 0 ? "#4ade80" : "#f87171" },
-          { label: "Return", value: fmtPct(pnlPct), color: pnlPct >= 0 ? "#4ade80" : "#f87171" },
-          { label: "Unrealized P&L", value: fmt$(unrealizedPnl), color: unrealizedPnl >= 0 ? "#4ade80" : "#f87171" },
-          { label: "Win Rate", value: settled.length > 0 ? `${(winRate * 100).toFixed(0)}%` : "—", color: "#e0e0e0" },
-          { label: "Max Drawdown", value: maxDrawdown > 0 ? `-${(maxDrawdown * 100).toFixed(1)}%` : "0%", color: maxDrawdown > 0.1 ? "#f87171" : "#e0e0e0" },
-          { label: "Positions", value: `${open.length} open / ${settled.length} closed`, color: "#666" },
-        ].map(s => (
-          <div key={s.label} style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "14px 16px" }}>
-            <div style={{ color: "#666", fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.05em" }}>{s.label}</div>
-            <div style={{ color: s.color, fontSize: 16, fontWeight: 700 }}>{s.value}</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 24 }}>
+        {stats.map(s => (
+          <div key={s.label} style={{ ...card, padding: "14px 16px" }}>
+            <div style={{ color: T.muted, fontSize: 10, marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, fontFamily: T.sans }}>{s.label}</div>
+            <div style={{ color: s.color, fontSize: 16, fontWeight: 700, fontFamily: T.mono }}>{s.value}</div>
           </div>
         ))}
       </div>
 
       {/* Equity curve */}
-      <div style={{ background: "#111", border: "1px solid #222", borderRadius: 8, padding: "16px 20px", marginBottom: 28 }}>
-        <div style={{ color: "#666", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 12 }}>
+      <div style={{ ...card, padding: "16px 20px", marginBottom: 28 }}>
+        <div style={{ color: T.muted, fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 600, marginBottom: 12, fontFamily: T.sans }}>
           Cumulative Realized P&L
         </div>
         <EquityCurve positions={positions} />
-        <div style={{ display: "flex", justifyContent: "space-between", color: "#444", fontSize: 11, marginTop: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", color: T.dim, fontSize: 10, marginTop: 6, fontFamily: T.mono }}>
           <span>Trade #0</span>
           {settled.length > 0 && <span>Trade #{settled.length}</span>}
         </div>
@@ -178,18 +210,16 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
 
       {/* Open positions */}
       <div style={{ marginBottom: 28 }}>
-        <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: "#e0e0e0" }}>
-          Open Positions ({open.length})
-        </h2>
+        <div style={sectionHeading}>Open Positions <span style={{ color: T.muted, fontWeight: 400 }}>({open.length})</span></div>
         {open.length === 0 ? (
-          <div style={{ color: "#444", fontSize: 12, padding: "16px 0" }}>No open positions.</div>
+          <div style={{ color: T.dim, fontSize: 12, padding: "16px 0" }}>No open positions.</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ overflowX: "auto", ...card }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr style={{ color: "#555", fontSize: 11, textTransform: "uppercase", borderBottom: "1px solid #222" }}>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
                   {["Market", "Side", "Edge at Entry", "Entry Price", "Notional", "Unrealized P&L", "Last Signal"].map(h => (
-                    <th key={h} scope="col" style={{ textAlign: "left", padding: "6px 10px", fontWeight: 500 }}>{h}</th>
+                    <th key={h} scope="col" style={thStyle}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -198,27 +228,23 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
                   const lastUpdate = p.edgeHistory?.[p.edgeHistory.length - 1];
                   const headline = lastUpdate?.headline ?? (lastUpdate ? `edge ${lastUpdate.edge > 0 ? "+" : ""}${lastUpdate.edge.toFixed(1)}pp` : "—");
                   return (
-                    <tr key={p.id} style={{ borderBottom: "1px solid #1a1a1a" }}>
-                      <td style={{ padding: "10px 10px", maxWidth: 320 }}>
-                        <div style={{ color: "#e0e0e0", lineHeight: 1.4 }}>{p.marketQuestion.slice(0, 100)}{p.marketQuestion.length > 100 ? "…" : ""}</div>
-                        <div style={{ color: "#444", fontSize: 11, marginTop: 2 }}>{fmtDate(p.entryTimestamp)}</div>
+                    <tr key={p.id}>
+                      <td style={{ ...tdStyle, fontFamily: T.sans, maxWidth: 320 }}>
+                        <div style={{ color: T.text, lineHeight: 1.4 }}>{p.marketQuestion.slice(0, 100)}{p.marketQuestion.length > 100 ? "…" : ""}</div>
+                        <div style={{ color: T.dim, fontSize: 11, marginTop: 2, fontFamily: T.mono }}>{fmtDate(p.entryTimestamp)}</div>
                       </td>
-                      <td style={{ padding: "10px 10px" }}>
-                        <span style={{ color: p.side === "YES" ? "#4ade80" : "#f87171", fontWeight: 700 }}>{p.side}</span>
+                      <td style={tdStyle}>
+                        <span style={{ color: p.side === "YES" ? T.green : T.red, fontWeight: 700 }}>{p.side}</span>
                       </td>
-                      <td style={{ padding: "10px 10px", color: p.edgeAtEntry >= 0 ? "#4ade80" : "#f87171" }}>
+                      <td style={{ ...tdStyle, color: p.edgeAtEntry >= 0 ? T.green : T.red }}>
                         {p.edgeAtEntry > 0 ? "+" : ""}{p.edgeAtEntry.toFixed(1)}pp
                       </td>
-                      <td style={{ padding: "10px 10px", color: "#aaa" }}>
-                        {p.entryPrice.toFixed(1)}¢
-                      </td>
-                      <td style={{ padding: "10px 10px", color: "#aaa" }}>
-                        ${p.notionalSize.toFixed(2)}
-                      </td>
-                      <td style={{ padding: "10px 10px", color: (p.unrealizedPnl ?? 0) >= 0 ? "#4ade80" : "#f87171" }}>
+                      <td style={{ ...tdStyle, color: T.muted }}>{p.entryPrice.toFixed(1)}¢</td>
+                      <td style={{ ...tdStyle, color: T.muted }}>${p.notionalSize.toFixed(2)}</td>
+                      <td style={{ ...tdStyle, color: (p.unrealizedPnl ?? 0) >= 0 ? T.green : T.red }}>
                         {fmt$(p.unrealizedPnl ?? 0)}
                       </td>
-                      <td style={{ padding: "10px 10px", color: "#666", maxWidth: 200, fontSize: 11 }}>
+                      <td style={{ ...tdStyle, color: T.muted, maxWidth: 200, fontSize: 11, fontFamily: T.sans }}>
                         {headline.length > 80 ? headline.slice(0, 80) + "…" : headline}
                       </td>
                     </tr>
@@ -232,39 +258,37 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
 
       {/* Closed positions */}
       <div style={{ marginBottom: 48 }}>
-        <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 14, color: "#e0e0e0" }}>
-          Closed Positions ({closed.length})
-        </h2>
+        <div style={sectionHeading}>Closed Positions <span style={{ color: T.muted, fontWeight: 400 }}>({closed.length})</span></div>
         {closed.length === 0 ? (
-          <div style={{ color: "#444", fontSize: 12, padding: "16px 0" }}>No closed positions yet.</div>
+          <div style={{ color: T.dim, fontSize: 12, padding: "16px 0" }}>No closed positions yet.</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ overflowX: "auto", ...card }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
-                <tr style={{ color: "#555", fontSize: 11, textTransform: "uppercase", borderBottom: "1px solid #222" }}>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
                   {["Market", "Side", "Entry", "Exit", "P&L", "Reason", "Closed"].map(h => (
-                    <th key={h} scope="col" style={{ textAlign: "left", padding: "6px 10px", fontWeight: 500 }}>{h}</th>
+                    <th key={h} scope="col" style={thStyle}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {closed.map(p => (
-                  <tr key={p.id} style={{ borderBottom: "1px solid #1a1a1a" }}>
-                    <td style={{ padding: "10px 10px", maxWidth: 320 }}>
-                      <div style={{ color: "#e0e0e0", lineHeight: 1.4 }}>{p.marketQuestion.slice(0, 100)}{p.marketQuestion.length > 100 ? "…" : ""}</div>
+                  <tr key={p.id} style={{ opacity: 0.85 }}>
+                    <td style={{ ...tdStyle, fontFamily: T.sans, maxWidth: 320 }}>
+                      <div style={{ color: T.text, lineHeight: 1.4 }}>{p.marketQuestion.slice(0, 100)}{p.marketQuestion.length > 100 ? "…" : ""}</div>
                     </td>
-                    <td style={{ padding: "10px 10px" }}>
-                      <span style={{ color: p.side === "YES" ? "#4ade80" : "#f87171", fontWeight: 700 }}>{p.side}</span>
+                    <td style={tdStyle}>
+                      <span style={{ color: p.side === "YES" ? T.green : T.red, fontWeight: 700 }}>{p.side}</span>
                     </td>
-                    <td style={{ padding: "10px 10px", color: "#aaa" }}>{p.entryPrice.toFixed(1)}¢</td>
-                    <td style={{ padding: "10px 10px", color: "#aaa" }}>{p.exitPrice !== undefined ? `${p.exitPrice.toFixed(1)}¢` : "—"}</td>
-                    <td style={{ padding: "10px 10px", fontWeight: 600, color: (p.pnl ?? 0) >= 0 ? "#4ade80" : "#f87171" }}>
+                    <td style={{ ...tdStyle, color: T.muted }}>{p.entryPrice.toFixed(1)}¢</td>
+                    <td style={{ ...tdStyle, color: T.muted }}>{p.exitPrice !== undefined ? `${p.exitPrice.toFixed(1)}¢` : "—"}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600, color: (p.pnl ?? 0) >= 0 ? T.green : T.red }}>
                       {fmt$(p.pnl ?? 0)}
                     </td>
-                    <td style={{ padding: "10px 10px", color: "#666", fontSize: 11 }}>
+                    <td style={{ ...tdStyle, color: T.muted, fontSize: 11, fontFamily: T.sans }}>
                       {p.exitReason ?? "—"}
                     </td>
-                    <td style={{ padding: "10px 10px", color: "#555", fontSize: 11 }}>
+                    <td style={{ ...tdStyle, color: T.dim, fontSize: 11, fontFamily: T.mono }}>
                       {fmtDate(p.exitTimestamp)}
                     </td>
                   </tr>
@@ -276,14 +300,14 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
       </div>
 
       {/* Waitlist CTA */}
-      <div style={{ background: "#111", border: "1px solid #222", borderRadius: 10, padding: "28px 32px", maxWidth: 540 }}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 8 }}>Get the daily signal digest</h3>
-        <p style={{ color: "#666", fontSize: 12, marginBottom: 18, lineHeight: 1.6 }}>
+      <div style={{ ...card, padding: "28px 32px", maxWidth: 540 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 8, fontFamily: T.sans }}>Get the daily signal digest</h3>
+        <p style={{ color: T.muted, fontSize: 12, marginBottom: 18, lineHeight: 1.6, fontFamily: T.sans }}>
           Top 3 edge opportunities each morning before the market opens. Free while in beta.
           We email when notable positions close, not daily noise.
         </p>
         {joined ? (
-          <div style={{ color: "#4ade80", fontSize: 13, padding: "10px 14px", background: "#0d1f0d", border: "1px solid #1a4a1a", borderRadius: 6 }}>
+          <div style={{ color: T.green, fontSize: 13, padding: "10px 14px", background: "rgba(16,185,129,0.08)", border: `1px solid rgba(16,185,129,0.25)`, borderRadius: 8, fontFamily: T.sans }}>
             You&apos;re on the list. We&apos;ll reach out when the signal quality threshold is hit.
           </div>
         ) : (
@@ -292,19 +316,17 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
       </div>
 
       {/* Footer */}
-      <div style={{ marginTop: 48, color: "#444", fontSize: 11, lineHeight: 1.8 }}>
+      <div style={{ marginTop: 48, color: T.dim, fontSize: 11, lineHeight: 1.8, fontFamily: T.sans }}>
         <p>Paper trading only. No real money. Past performance does not predict future results.</p>
-        <p>Bankroll: $10,000 starting. Quarter-Kelly sizing. Max 5% per position.</p>
+        <p>Bankroll: ${bankroll.toLocaleString()} starting. Quarter-Kelly sizing. Max 5% per position.</p>
       </div>
     </div>
   );
 }
 
-// ─── Waitlist form (client component) ────────────────────────────────────────
+// ─── Waitlist form (server component — plain HTML form, works without JS) ────
 
 function WaitlistForm() {
-  // This is a server component file, so we use a plain HTML form with action
-  // pointing to the waitlist API. Works without JS.
   return (
     <form
       action="/api/waitlist"
@@ -316,20 +338,20 @@ function WaitlistForm() {
         name="email"
         required
         autoComplete="email"
-        placeholder="you@example.com…"
+        placeholder="you@example.com"
         className="waitlist-input"
       />
       <button
         type="submit"
         style={{
-          background: "#818cf8",
+          background: "#10b981",
           color: "#fff",
           border: "none",
           borderRadius: 6,
           padding: "9px 20px",
           fontWeight: 600,
           fontSize: 13,
-          fontFamily: "ui-monospace, Menlo, Consolas, monospace",
+          fontFamily: "Inter, system-ui, -apple-system, sans-serif",
           cursor: "pointer",
           whiteSpace: "nowrap",
         }}
