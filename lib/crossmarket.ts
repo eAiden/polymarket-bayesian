@@ -173,7 +173,7 @@ export async function fetchCrossMarketData(question: string): Promise<CrossMarke
 }
 
 export function formatCrossMarketForPrompt(matches: CrossMarketMatch[]): string {
-  if (matches.length === 0) return "No matching questions found on Metaculus or Manifold.";
+  if (!Array.isArray(matches) || matches.length === 0) return "No matching questions found on Metaculus or Manifold.";
   return matches
     .map(m => `- [${m.platform} | match:${Math.round(m.similarity * 100)}%] "${m.title}" → ${m.probability}%`)
     .join("\n");

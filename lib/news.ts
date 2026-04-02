@@ -196,7 +196,7 @@ export async function fetchNewsForMarket(question: string, daysUntilResolution =
 
   // L2: Postgres cache (survives server restarts)
   const pgData = await getNewsCache(cacheKey);
-  if (pgData) {
+  if (Array.isArray(pgData) && pgData.length > 0) {
     console.log(`[news] L2 Postgres cache hit for "${question.slice(0, 40)}"`);
     newsCache.set(cacheKey, { data: pgData, expiry: Date.now() + CACHE_TTL_MS });
     return pgData;
@@ -236,7 +236,7 @@ export async function fetchNewsForMarket(question: string, daysUntilResolution =
 }
 
 export function formatNewsForPrompt(headlines: NewsHeadline[]): string {
-  if (headlines.length === 0) return "No recent news found.";
+  if (!Array.isArray(headlines) || headlines.length === 0) return "No recent news found.";
   return headlines
     .map((h, i) => {
       const meta = [h.source, h.score !== undefined ? `relevance:${h.score}` : ""].filter(Boolean).join(" | ");

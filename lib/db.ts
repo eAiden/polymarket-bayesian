@@ -661,16 +661,26 @@ export async function getNewsCache(key: string): Promise<NewsHeadline[] | null> 
     SELECT data FROM news_cache WHERE cache_key = ${key} AND expires_at > NOW()
   `;
   if (rows.length === 0) return null;
-  return rows[0].data as NewsHeadline[];
+  const raw = rows[0].data;
+  // postgres.js returns JSONB as a parsed JS value; guard against legacy
+  // double-encoded strings (stored as JSON string instead of JSON array)
+  if (typeof raw === "string") {
+    try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : null; }
+    catch { return null; }
+  }
+  return Array.isArray(raw) ? (raw as NewsHeadline[]) : null;
 }
 
 export async function setNewsCache(key: string, data: NewsHeadline[], ttlSec: number): Promise<void> {
   const db = sql();
   // Cleanup expired entries
   await db`DELETE FROM news_cache WHERE expires_at < NOW()`;
+  // Use ::jsonb cast so Postgres parses the JSON string into a real JSONB value.
+  // This avoids potential double-encoding that can occur if postgres.js also
+  // tries to JSON-serialize a string parameter destined for a JSONB column.
   await db`
     INSERT INTO news_cache (cache_key, data, expires_at)
-    VALUES (${key}, ${JSON.stringify(data)}, NOW() + (${ttlSec} * interval '1 second'))
+    VALUES (${key}, ${JSON.stringify(data)}::jsonb, NOW() + (${ttlSec} * interval '1 second'))
     ON CONFLICT (cache_key) DO UPDATE SET
       data = EXCLUDED.data,
       expires_at = EXCLUDED.expires_at
