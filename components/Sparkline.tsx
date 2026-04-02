@@ -9,7 +9,7 @@ interface SparklineProps {
 }
 
 export function Sparkline({ history, width = 140, height = 36 }: SparklineProps) {
-  if (history.length < 2) {
+  if (!Array.isArray(history) || history.length < 2) {
     return (
       <div style={{ width, height, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <span style={{ fontSize: 10, color: "var(--muted)" }}>tracking…</span>

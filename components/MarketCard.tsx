@@ -32,7 +32,7 @@ function shortDate(iso: string): string {
 }
 
 function priceMovement(history: TrackedMarket["history"]): { delta: number; label: string } | null {
-  if (!history || history.length < 2) return null;
+  if (!Array.isArray(history) || history.length < 2) return null;
   const prev = history[history.length - 2].marketProb;
   const curr = history[history.length - 1].marketProb;
   const delta = curr - prev;
@@ -42,6 +42,7 @@ function priceMovement(history: TrackedMarket["history"]): { delta: number; labe
 }
 
 function algoHistory(history: DailySnapshot[]): DailySnapshot[] {
+  if (!Array.isArray(history)) return [];
   return history.filter(s => s.fairProb != null).reverse();
 }
 
@@ -185,7 +186,7 @@ export function MarketCard({ market, onToggleSave, position }: MarketCardProps) 
       <div className="sparkline-wrap">
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span className="sparkline-label">Price history</span>
-          {market.history.length >= 2 && (() => {
+          {Array.isArray(market.history) && market.history.length >= 2 && (() => {
             const first = market.history[0].marketProb;
             const last = market.history[market.history.length - 1].marketProb;
             const total = last - first;

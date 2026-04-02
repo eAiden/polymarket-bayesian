@@ -99,7 +99,12 @@ export function Dashboard({ initialData }: DashboardProps) {
   const fetchStore = useCallback(async () => {
     try {
       const res = await fetch("/api/markets", { cache: "no-store" });
-      if (res.ok) setStore(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        // Ensure markets is always an array even if the response is malformed
+        if (!Array.isArray(data?.markets)) data.markets = [];
+        setStore(data);
+      }
     } catch { /* silent */ }
   }, []);
 
@@ -184,7 +189,7 @@ export function Dashboard({ initialData }: DashboardProps) {
   };
 
   // Filter + sort markets
-  const markets: TrackedMarket[] = store.markets
+  const markets: TrackedMarket[] = (Array.isArray(store.markets) ? store.markets : [])
     .filter((m) => {
       if (!showResolved && m.resolved) return false;
       if (category === "Saved") return !!m.saved;
@@ -200,7 +205,8 @@ export function Dashboard({ initialData }: DashboardProps) {
       return 0;
     });
 
-  const activeMarkets = store.markets.filter((m) => !m.resolved);
+  const safeMarkets = Array.isArray(store.markets) ? store.markets : [];
+  const activeMarkets = safeMarkets.filter((m) => !m.resolved);
   const highEdgeCount = activeMarkets.filter((m) => m.edgeLevel === "high").length;
   const avgEdge = activeMarkets.reduce((s, m) => s + Math.abs(m.edge), 0) /
     Math.max(1, activeMarkets.length);
