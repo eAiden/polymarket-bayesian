@@ -1,10 +1,23 @@
 import { runScanPipeline } from "@/lib/pipeline";
 import { migrate, sql } from "@/lib/db";
 import type { ScanProgressCallback } from "@/lib/pipeline";
+import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
+export async function POST(req: NextRequest) {
+  // Gate behind SCAN_SECRET if set (prevents public visitors from burning API credits)
+  const secret = process.env.SCAN_SECRET;
+  if (secret) {
+    const auth = req.headers.get("authorization");
+    if (auth !== `Bearer ${secret}`) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }
+
   const encoder = new TextEncoder();
 
   // Ensure DB is migrated before streaming starts

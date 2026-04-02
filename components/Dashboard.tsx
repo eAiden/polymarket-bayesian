@@ -113,7 +113,42 @@ export function Dashboard({ initialData }: DashboardProps) {
     setScanning(true);
     setScanProgress(null);
     try {
-      const res = await fetch("/api/scan", { method: "POST" });
+      // Send stored scan key (if any) — server ignores it when SCAN_SECRET is not set
+      const storedKey = typeof window !== "undefined"
+        ? localStorage.getItem("scanKey") ?? ""
+        : "";
+      const res = await fetch("/api/scan", {
+        method: "POST",
+        headers: storedKey ? { Authorization: `Bearer ${storedKey}` } : {},
+      });
+      // If unauthorized, prompt for password and retry once
+      if (res.status === 401) {
+        const key = window.prompt("Enter scan password:");
+        if (!key) { setScanning(false); return; }
+        localStorage.setItem("scanKey", key);
+        const retry = await fetch("/api/scan", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}` },
+        });
+        if (retry.status === 401) {
+          localStorage.removeItem("scanKey");
+          setScanError("Wrong password.");
+          setScanning(false);
+          return;
+        }
+        // Re-assign res to retry for the stream reading below
+        return void handleScanStream(retry);
+      }
+      await handleScanStream(res);
+    } catch (err) {
+      setScanError((err as Error).message);
+      setScanning(false);
+      setScanProgress(null);
+    }
+  };
+
+  const handleScanStream = async (res: Response) => {
+    try {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error((body as { error?: string }).error ?? `Server error ${res.status}`);
@@ -135,12 +170,8 @@ export function Dashboard({ initialData }: DashboardProps) {
           try {
             const event: ScanEvent = JSON.parse(data);
             setScanProgress(event);
-            if (event.phase === "error") {
-              setScanError(event.message ?? "Scan failed");
-            }
-            if (event.phase === "done") {
-              await fetchStore();
-            }
+            if (event.phase === "error") setScanError(event.message ?? "Scan failed");
+            if (event.phase === "done") await fetchStore();
           } catch { /* ignore malformed SSE */ }
         }
       }
