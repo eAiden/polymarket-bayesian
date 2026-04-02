@@ -3,6 +3,7 @@
 
 import type { ScanEvent, ScanError } from "./types";
 import { fetchFilteredMarkets, fetchMarketPrice } from "./polymarket";
+import { kellySize } from "./paper-trading";
 import {
   acquireScanLock, releaseScanLock, upsertMarket,
   insertSignal, appendPriceHistory, touchMarketScan,
@@ -135,14 +136,16 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         const openTrades = await getOpenTrades();
         const alreadyOpen = openTrades.some(t => t.marketId === market.id);
         if (!alreadyOpen) {
+          const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
+          const sizeUsd = Math.max(1, notional); // at least $1 if Kelly rounds to 0
           await openTrade({
             marketId: market.id,
             direction,
             entryProb: market.yesProbPct,
             entryEdge: edgePct,
-            sizeUsd: 10, // fixed $10 paper trade for simplicity
+            sizeUsd,
           });
-          console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp)`);
+          console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, size=$${sizeUsd})`);
         }
       }
 
@@ -256,6 +259,22 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
 
   await appendPriceHistory(marketId, market.yesProbPct, posteriorProb);
   await touchMarketScan(marketId);
+
+  // Open paper trade on news-triggered re-analysis too
+  if (absEdge >= 5 && confidence !== "low") {
+    const openTrades = await getOpenTrades();
+    const alreadyOpen = openTrades.some(t => t.marketId === marketId);
+    if (!alreadyOpen) {
+      const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
+      await openTrade({
+        marketId,
+        direction,
+        entryProb: market.yesProbPct,
+        entryEdge: edgePct,
+        sizeUsd: Math.max(1, notional),
+      });
+    }
+  }
 
   console.log(`[reanalyze] ${market.question.slice(0, 40)}: edge=${edgePct > 0 ? "+" : ""}${edgePct}pp (lr=${lr.toFixed(2)})`);
 }

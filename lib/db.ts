@@ -515,24 +515,33 @@ export async function getOpenTrades(): Promise<OpenTrade[]> {
 }
 
 export function defaultPaperTradingState(): PaperTradingState {
-  return { bankroll: 1000, currentBankroll: 1000, positions: [], totalPnl: 0, winRate: 0, maxDrawdown: 0 };
+  return { bankroll: DEFAULT_BANKROLL, currentBankroll: DEFAULT_BANKROLL, positions: [], totalPnl: 0, winRate: 0, maxDrawdown: 0 };
 }
+
+const DEFAULT_BANKROLL = 10_000;
 
 export async function getPaperTradingState(): Promise<PaperTradingState> {
   const db = sql();
-  const rows = await db`SELECT * FROM trades ORDER BY opened_at ASC`;
+
+  // JOIN trades with markets to get market question
+  const rows = await db`
+    SELECT t.*, m.question AS market_question
+    FROM trades t
+    LEFT JOIN markets m ON m.id = t.market_id
+    ORDER BY t.opened_at ASC
+  `;
 
   const closed = rows.filter(r => r.status === 'closed');
   const open = rows.filter(r => r.status === 'open');
 
   const totalPnl = closed.reduce((sum, r) => sum + ((r.pnl_usd as number) ?? 0), 0);
-  const bankroll = 1000 + totalPnl;
   const wins = closed.filter(r => ((r.pnl_usd as number) ?? 0) > 0);
-  const winRate = closed.length > 0 ? (wins.length / closed.length) * 100 : 0;
+  // Store as 0–1 fraction — Dashboard renders (pt.winRate * 100)
+  const winRate = closed.length > 0 ? wins.length / closed.length : 0;
 
-  // Compute max drawdown
-  let peak = 1000;
-  let running = 1000;
+  // Compute max drawdown from starting bankroll
+  let peak = DEFAULT_BANKROLL;
+  let running = DEFAULT_BANKROLL;
   let maxDrawdown = 0;
   for (const r of closed) {
     running += (r.pnl_usd as number) ?? 0;
@@ -542,29 +551,36 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
   }
 
   // Map to PaperPosition shape for the UI
-  const toPosition = (r: Record<string, unknown>): PaperPosition => ({
-    id: String(r.id),
-    marketId: r.market_id as string,
-    marketQuestion: "",
-    side: (r.direction as string).toUpperCase() as "YES" | "NO",
-    entryPrice: r.entry_prob as number,
-    entryTimestamp: (r.opened_at as Date).toISOString(),
-    edgeAtEntry: r.entry_edge as number,
-    kellyFraction: 0,
-    notionalSize: r.size_usd as number,
-    status: r.status as "open" | "closed" | "stopped",
-    exitPrice: r.exit_prob as number | undefined,
-    exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
-    exitReason: r.close_reason ? "resolution" as const : undefined,
-    pnl: (r.pnl_usd as number) ?? undefined,
-  });
+  const toPosition = (r: Record<string, unknown>): PaperPosition => {
+    const edgeAtEntry = r.entry_edge as number;
+    const entryProb = r.entry_prob as number;
+    const sizeUsd = r.size_usd as number;
+    // Reconstruct Kelly fraction: size / bankroll (approximate)
+    const kellyFraction = Math.round((sizeUsd / DEFAULT_BANKROLL) * 10000) / 10000;
+    return {
+      id: String(r.id),
+      marketId: r.market_id as string,
+      marketQuestion: (r.market_question as string | null) ?? "",
+      side: (r.direction as string).toUpperCase() as "YES" | "NO",
+      entryPrice: entryProb,
+      entryTimestamp: (r.opened_at as Date).toISOString(),
+      edgeAtEntry,
+      kellyFraction,
+      notionalSize: sizeUsd,
+      status: r.status as "open" | "closed" | "stopped",
+      exitPrice: r.exit_prob != null ? (r.exit_prob as number) : undefined,
+      exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
+      exitReason: r.close_reason ? "resolution" as const : undefined,
+      pnl: r.pnl_usd != null ? (r.pnl_usd as number) : undefined,
+    };
+  };
 
   return {
-    bankroll,
-    currentBankroll: bankroll,
+    bankroll: DEFAULT_BANKROLL,
+    currentBankroll: DEFAULT_BANKROLL + totalPnl,
     positions: [...open.map(toPosition), ...closed.map(toPosition)],
     totalPnl: Math.round(totalPnl * 100) / 100,
-    winRate: Math.round(winRate * 10) / 10,
+    winRate: Math.round(winRate * 1000) / 1000, // 0–1 fraction
     maxDrawdown: Math.round(maxDrawdown * 10000) / 10000,
   };
 }
