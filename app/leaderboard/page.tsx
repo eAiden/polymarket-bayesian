@@ -3,13 +3,11 @@
 
 import Link from "next/link";
 import type { PaperTradingState, PaperPosition } from "@/lib/paper-trading";
-import { loadPaperTradingAsync } from "@/lib/paper-trading";
+import { getPaperTradingState, defaultPaperTradingState } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-function defaultState(): PaperTradingState {
-  return { bankroll: 10_000, currentBankroll: 10_000, positions: [], totalPnl: 0, winRate: 0, maxDrawdown: 0 };
-}
+const loadPaperTradingAsync = getPaperTradingState;
 
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
@@ -110,7 +108,7 @@ function EquityCurve({ positions }: { positions: PaperPosition[] }) {
 export default async function LeaderboardPage({ searchParams }: { searchParams?: Promise<Record<string, string>> }) {
   const params = await searchParams;
   const joined = params?.joined === "1";
-  const state = await loadPaperTradingAsync().catch(() => defaultState());
+  const state = await loadPaperTradingAsync().catch(() => defaultPaperTradingState());
   const { positions, bankroll, currentBankroll, totalPnl, winRate, maxDrawdown } = state;
 
   const open = positions.filter(p => p.status === "open");

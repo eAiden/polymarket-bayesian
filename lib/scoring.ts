@@ -1,11 +1,7 @@
 // Weighted linear scoring model — produces edge estimates in pp, not probabilities.
-// Trainable: weights stored in data/model-weights.json, updatable from calibration data.
+// Weights are hardcoded defaults; model training via DB calibration data is a future step.
 
-import { readFileSync, existsSync } from "fs";
-import { join } from "path";
 import type { FeatureVector, ModelWeights, ScoringResult } from "./types";
-
-const WEIGHTS_FILE = join(process.cwd(), "data", "model-weights.json");
 
 // ─── Default weights (hand-tuned starting point) ────────────────────────────
 // These are multiplied by their corresponding feature value to produce pp contribution.
@@ -39,17 +35,6 @@ let cachedWeights: ModelWeights | null = null;
 
 export function loadWeights(): ModelWeights {
   if (cachedWeights) return cachedWeights;
-  try {
-    if (existsSync(WEIGHTS_FILE)) {
-      const raw = JSON.parse(readFileSync(WEIGHTS_FILE, "utf-8")) as ModelWeights;
-      if (raw.version) {
-        cachedWeights = raw;
-        return raw;
-      }
-    }
-  } catch {
-    // Fall through to defaults
-  }
   cachedWeights = { ...DEFAULT_WEIGHTS };
   return cachedWeights;
 }

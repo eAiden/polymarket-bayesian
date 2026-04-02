@@ -491,6 +491,10 @@ export async function getOpenTrades(): Promise<OpenTrade[]> {
   }));
 }
 
+export function defaultPaperTradingState(): PaperTradingState {
+  return { bankroll: 1000, currentBankroll: 1000, positions: [], totalPnl: 0, winRate: 0, maxDrawdown: 0 };
+}
+
 export async function getPaperTradingState(): Promise<PaperTradingState> {
   const db = sql();
   const rows = await db`SELECT * FROM trades ORDER BY opened_at ASC`;

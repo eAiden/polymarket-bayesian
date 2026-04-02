@@ -1,11 +1,5 @@
-// Tracks resolved market outcomes vs Bayesian fair estimates.
-// Computes Brier score: lower = better; 0.25 = random (always predict 50%); ~0.15 = good forecaster.
-
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "fs";
-import { join } from "path";
-
-const DATA_DIR = join(process.cwd(), "data");
-const CALIB_FILE = join(DATA_DIR, "calibration.json");
+// Calibration types and pure functions.
+// Persistence is handled by lib/db.ts (Postgres). No file I/O here.
 
 export interface CalibrationRecord {
   marketId: string;
@@ -26,31 +20,6 @@ export interface CalibrationSummary {
   brierSkill: number;       // (baseline - score) / baseline → skill % above random
   hitRate: number;          // % of markets where direction was correct
   records: CalibrationRecord[];
-}
-
-export function loadCalibrationRecords(): CalibrationRecord[] {
-  try {
-    if (!existsSync(CALIB_FILE)) return [];
-    return JSON.parse(readFileSync(CALIB_FILE, "utf-8")) as CalibrationRecord[];
-  } catch {
-    return [];
-  }
-}
-
-export function appendCalibrationRecord(record: CalibrationRecord): void {
-  try {
-    if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
-    const existing = loadCalibrationRecords();
-    // Avoid duplicates — check by marketId (one record per market resolution)
-    if (existing.some((r) => r.marketId === record.marketId)) return;
-    existing.push(record);
-    // Atomic write: write to .tmp then rename
-    const tmp = CALIB_FILE + ".tmp";
-    writeFileSync(tmp, JSON.stringify(existing, null, 2), "utf-8");
-    renameSync(tmp, CALIB_FILE);
-  } catch (err) {
-    console.error("[calibration] Failed to save record:", err);
-  }
 }
 
 export function computeSummary(records: CalibrationRecord[]): CalibrationSummary {
