@@ -32,7 +32,7 @@ function shortDate(iso: string): string {
 }
 
 function priceMovement(history: TrackedMarket["history"]): { delta: number; label: string } | null {
-  if (history.length < 2) return null;
+  if (!history || history.length < 2) return null;
   const prev = history[history.length - 2].marketProb;
   const curr = history[history.length - 1].marketProb;
   const delta = curr - prev;
@@ -249,12 +249,12 @@ export function MarketCard({ market, onToggleSave, position }: MarketCardProps) 
             )}
 
             {market.keyFactors &&
-              (market.keyFactors.bullish.length > 0 || market.keyFactors.bearish.length > 0) && (
+              ((market.keyFactors.bullish?.length ?? 0) > 0 || (market.keyFactors.bearish?.length ?? 0) > 0) && (
                 <div className="key-factors">
-                  {market.keyFactors.bullish.map((f, i) => (
+                  {(market.keyFactors.bullish ?? []).map((f, i) => (
                     <span key={`b${i}`} className="signal-chip signal-yes">{f}</span>
                   ))}
-                  {market.keyFactors.bearish.map((f, i) => (
+                  {(market.keyFactors.bearish ?? []).map((f, i) => (
                     <span key={`r${i}`} className="signal-chip signal-no">{f}</span>
                   ))}
                 </div>
@@ -263,9 +263,9 @@ export function MarketCard({ market, onToggleSave, position }: MarketCardProps) 
             {market.reasoning && (
               <div className="reasoning">
                 <p>{market.reasoning}</p>
-                {market.sources.length > 0 && (
+                {(market.sources?.length ?? 0) > 0 && (
                   <div className="sources">
-                    {market.sources.map((s, i) => (
+                    {(market.sources ?? []).map((s, i) => (
                       <span key={i} className="source-tag">{s}</span>
                     ))}
                   </div>

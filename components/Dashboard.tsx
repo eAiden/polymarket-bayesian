@@ -583,8 +583,8 @@ function TradeRow({ pos }: { pos: PaperPosition }) {
 
   return (
     <tr className={pos.status !== "open" ? "trade-closed" : ""}>
-      <td className="trade-question" title={pos.marketQuestion}>
-        {pos.marketQuestion.slice(0, 60)}{pos.marketQuestion.length > 60 ? "…" : ""}
+      <td className="trade-question" title={pos.marketQuestion ?? ""}>
+        {(pos.marketQuestion ?? "").slice(0, 60)}{(pos.marketQuestion ?? "").length > 60 ? "…" : ""}
       </td>
       <td>
         <span className="trade-side" style={{ color: sideColor }}>{pos.side}</span>

@@ -396,7 +396,11 @@ export async function getMarketStore(): Promise<MarketStore> {
       ? ((m.resolved_outcome as number) === 1 ? "correct" : "incorrect")
       : undefined;
 
-    const keyFactors = signal?.key_factors as { bullish: string[]; bearish: string[] } | undefined;
+    const rawKF = signal?.key_factors as { bullish?: unknown; bearish?: unknown } | undefined | null;
+    const keyFactors: { bullish: string[]; bearish: string[] } = {
+      bullish: Array.isArray(rawKF?.bullish) ? (rawKF!.bullish as string[]) : [],
+      bearish: Array.isArray(rawKF?.bearish) ? (rawKF!.bearish as string[]) : [],
+    };
     const sources = (signal?.sources ?? []) as string[];
     const topFact = (signal?.top_fact ?? undefined) as string | undefined;
     const newsAge = (signal?.news_age ?? "stale") as "stale" | "recent" | "breaking";
@@ -414,7 +418,7 @@ export async function getMarketStore(): Promise<MarketStore> {
       edgeLevel,
       direction,
       confidence,
-      keyFactors: keyFactors ?? { bullish: [], bearish: [] },
+      keyFactors,
       volume: (m.volume ?? "—") as string,
       endDate: (m.end_date ?? "—") as string,
       endDateIso: (m.end_date_iso ?? undefined) as string | undefined,
