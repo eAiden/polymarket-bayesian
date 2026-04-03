@@ -64,6 +64,7 @@ export async function processResolvedMarkets(): Promise<{ resolved: number; erro
           resolvedOutcome: outcome,
           brierScore,
           directionCorrect,
+          direction: (signal.direction === "NO" ? "NO" : "YES") as "YES" | "NO",
         });
         console.log(`[resolution] Calibration recorded: brier=${brierScore.toFixed(4)}, correct=${directionCorrect}`);
       }

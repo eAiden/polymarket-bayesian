@@ -115,6 +115,11 @@ export async function migrate(): Promise<void> {
     )
   `;
 
+  // Add direction column to calibration if not present (idempotent migration)
+  await db`
+    ALTER TABLE calibration ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT 'YES'
+  `;
+
   await db`
     CREATE TABLE IF NOT EXISTS news_alerts (
       id SERIAL PRIMARY KEY,
@@ -434,8 +439,6 @@ export async function getMarketStore(): Promise<MarketStore> {
     };
   });
 
-  void historyRows; // suppress unused variable warning
-
   return {
     lastScanAt,
     markets: trackedMarkets,
@@ -601,6 +604,7 @@ export async function insertCalibration(c: {
   resolvedOutcome: number;
   brierScore: number;
   directionCorrect: boolean;
+  direction: "YES" | "NO";
 }): Promise<void> {
   const db = sql();
   // Avoid duplicates — one record per market resolution
@@ -608,8 +612,8 @@ export async function insertCalibration(c: {
   if (existing.length > 0) return;
 
   await db`
-    INSERT INTO calibration (market_id, question, category, predicted_prob, resolved_outcome, brier_score, direction_correct)
-    VALUES (${c.marketId}, ${c.question}, ${c.category}, ${c.predictedProb}, ${c.resolvedOutcome}, ${c.brierScore}, ${c.directionCorrect})
+    INSERT INTO calibration (market_id, question, category, predicted_prob, resolved_outcome, brier_score, direction_correct, direction)
+    VALUES (${c.marketId}, ${c.question}, ${c.category}, ${c.predictedProb}, ${c.resolvedOutcome}, ${c.brierScore}, ${c.directionCorrect}, ${c.direction})
   `;
 }
 
@@ -640,11 +644,11 @@ export async function getCalibrationSummary(): Promise<CalibrationSummary> {
     marketId: r.market_id as string,
     question: r.question as string,
     fairProb: r.predicted_prob as number,
-    marketProb: r.predicted_prob as number,
+    marketProb: Math.round((r.resolved_outcome as number) * 100),
     outcome: Math.round(r.resolved_outcome as number) as 1 | 0,
     resolvedAt: (r.recorded_at as Date).toISOString(),
     brierScore: r.brier_score as number,
-    direction: "YES" as const,
+    direction: ((r.direction as string | null) ?? "YES") as "YES" | "NO",
     directionCorrect: r.direction_correct as boolean,
   }));
 
