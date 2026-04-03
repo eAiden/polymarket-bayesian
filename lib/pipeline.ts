@@ -8,10 +8,11 @@ import {
   acquireScanLock, releaseScanLock, upsertMarket,
   insertSignal, appendPriceHistory, batchAppendPriceHistory, touchMarketScan,
   getMarketStore, openTrade, getOpenTrades, closeTrade,
-  updateMarketPrice,
+  updateMarketPrice, insertTradeFeatures,
 } from "./db";
 import { signalsToLikelihoodRatio, bayesianUpdate, credibleInterval } from "./bayesian";
 import { fetchEnrichment, extractSignalsBatch } from "./signal-extraction";
+import { computeFeatures } from "./features";
 import { processResolvedMarkets } from "./resolution";
 import type { MarketEnrichment } from "./types";
 
@@ -209,7 +210,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         if (!openTradesByMarket.has(market.id)) {
           const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
           const sizeUsd = Math.max(1, notional); // at least $1 if Kelly rounds to 0
-          await openTrade({
+          const tradeId = await openTrade({
             marketId: market.id,
             direction,
             entryProb: market.yesProbPct,
@@ -218,6 +219,18 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
           });
           openTradesByMarket.set(market.id, { marketId: market.id, direction } as any);
           console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, size=$${sizeUsd})`);
+
+          // Save feature vector for model training
+          try {
+            const enrichment = enrichmentMap.get(market.id) ?? {};
+            const features = computeFeatures(
+              result.signal, market.yesProbPct, enrichment,
+              result.crossMatches, 0, // categoryBias=0; backfilled from calibration at training time
+            );
+            await insertTradeFeatures(tradeId, market.id, features as unknown as Record<string, unknown>, edgePct, direction, market.yesProbPct);
+          } catch (e) {
+            console.warn(`[pipeline] Failed to save trade features for trade #${tradeId}:`, e);
+          }
         }
       }
 
@@ -353,13 +366,24 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
     const alreadyOpen = openTrades.some(t => t.marketId === marketId);
     if (!alreadyOpen) {
       const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
-      await openTrade({
+      const tradeId = await openTrade({
         marketId,
         direction,
         entryProb: market.yesProbPct,
         entryEdge: edgePct,
         sizeUsd: Math.max(1, notional),
       });
+
+      // Save feature vector for model training
+      try {
+        const features = computeFeatures(
+          result.signal, market.yesProbPct, enrichment,
+          result.crossMatches, 0,
+        );
+        await insertTradeFeatures(tradeId, marketId, features as unknown as Record<string, unknown>, edgePct, direction, market.yesProbPct);
+      } catch (e) {
+        console.warn(`[reanalyze] Failed to save trade features for trade #${tradeId}:`, e);
+      }
     }
   }
 

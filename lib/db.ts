@@ -140,6 +140,23 @@ export async function migrate(): Promise<void> {
     )
   `;
 
+  await db`
+    CREATE TABLE IF NOT EXISTS trade_features (
+      id SERIAL PRIMARY KEY,
+      trade_id INTEGER NOT NULL,
+      market_id TEXT NOT NULL,
+      features JSONB NOT NULL,
+      edge_at_open REAL NOT NULL,
+      direction TEXT NOT NULL,
+      market_prob_at_open REAL NOT NULL,
+      model_version TEXT NOT NULL DEFAULT 'v1.0-default',
+      recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      outcome SMALLINT,
+      market_prob_at_resolution REAL,
+      resolved_at TIMESTAMPTZ
+    )
+  `;
+
   // Indexes for performance
   await db`CREATE INDEX IF NOT EXISTS idx_signals_market_id ON signals(market_id)`;
   await db`CREATE INDEX IF NOT EXISTS idx_signals_scanned_at ON signals(scanned_at DESC)`;
@@ -149,6 +166,9 @@ export async function migrate(): Promise<void> {
   await db`CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status)`;
   await db`CREATE INDEX IF NOT EXISTS idx_news_alerts_triggered ON news_alerts(triggered_at DESC)`;
   await db`CREATE INDEX IF NOT EXISTS idx_news_cache_expires ON news_cache(expires_at)`;
+  await db`CREATE INDEX IF NOT EXISTS idx_trade_features_trade_id ON trade_features(trade_id)`;
+  await db`CREATE INDEX IF NOT EXISTS idx_trade_features_market_id ON trade_features(market_id)`;
+  await db`CREATE INDEX IF NOT EXISTS idx_trade_features_outcome ON trade_features(outcome) WHERE outcome IS NOT NULL`;
 }
 
 // ─── Markets ─────────────────────────────────────────────────────────────────
@@ -518,6 +538,62 @@ export async function closeTrade(tradeId: number, exitProb: number, pnlUsd: numb
       close_reason = ${reason}, status = ${status}
     WHERE id = ${tradeId}
   `;
+}
+
+// ─── Trade feature vectors (training data) ───────────────────────────────────
+
+export async function insertTradeFeatures(
+  tradeId: number,
+  marketId: string,
+  features: Record<string, unknown>,
+  edgeAtOpen: number,
+  direction: string,
+  marketProbAtOpen: number,
+  modelVersion = "v1.0-default",
+): Promise<void> {
+  const db = sql();
+  await db`
+    INSERT INTO trade_features
+      (trade_id, market_id, features, edge_at_open, direction, market_prob_at_open, model_version)
+    VALUES
+      (${tradeId}, ${marketId}, ${JSON.stringify(features)}::jsonb,
+       ${edgeAtOpen}, ${direction}, ${marketProbAtOpen}, ${modelVersion})
+  `;
+}
+
+// Called from resolution.ts — backfills outcome onto all feature rows for this market.
+export async function backfillTradeOutcomes(
+  marketId: string,
+  outcome: 0 | 1,
+  marketProbAtResolution: number,
+): Promise<void> {
+  const db = sql();
+  await db`
+    UPDATE trade_features
+    SET outcome = ${outcome},
+        market_prob_at_resolution = ${marketProbAtResolution},
+        resolved_at = NOW()
+    WHERE market_id = ${marketId} AND outcome IS NULL
+  `;
+}
+
+// Returns all feature rows with a known outcome — used by model training.
+export async function getTrainableSnapshots(): Promise<
+  Array<{ features: Record<string, unknown>; outcome: 0 | 1; edgeAtOpen: number; direction: string }>
+> {
+  const db = sql();
+  const rows = await db`
+    SELECT features, outcome, edge_at_open, direction
+    FROM trade_features
+    WHERE outcome IS NOT NULL
+    ORDER BY recorded_at ASC
+  `;
+  return rows.map(r => ({
+    features: r.features as Record<string, unknown>,
+    outcome: r.outcome as 0 | 1,
+    edgeAtOpen: r.edge_at_open as number,
+    direction: r.direction as string,
+  }));
 }
 
 export async function getOpenTrades(): Promise<OpenTrade[]> {

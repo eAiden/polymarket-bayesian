@@ -1,7 +1,7 @@
 // Detect and process resolved markets — price crosses 98% or 2%.
 // Called at the start of each scan pipeline run.
 
-import { sql, markResolved, insertCalibration, getLatestSignal, getOpenTrades, closeTrade } from "./db";
+import { sql, markResolved, insertCalibration, getLatestSignal, getOpenTrades, closeTrade, backfillTradeOutcomes } from "./db";
 import { fetchMarketPrice } from "./polymarket";
 
 export async function processResolvedMarkets(): Promise<{ resolved: number; errors: string[] }> {
@@ -43,8 +43,9 @@ export async function processResolvedMarkets(): Promise<{ resolved: number; erro
         continue;
       }
 
-      // Mark resolved in DB
+      // Mark resolved in DB and backfill training labels onto feature vectors
       await markResolved(market.id as string, outcome);
+      await backfillTradeOutcomes(market.id as string, outcome, price);
       console.log(`[resolution] "${(market.question as string).slice(0, 50)}" → outcome=${outcome} (price=${price}%)`);
 
       // Get latest signal for calibration
