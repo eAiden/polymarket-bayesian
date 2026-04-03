@@ -665,13 +665,15 @@ function TradeRow({ pos }: { pos: PaperPosition }) {
       <td>
         {pos.status === "open" ? (
           <span className="trade-status-open">OPEN</span>
-        ) : pos.status === "stopped" ? (
+        ) : (pos.status === "stopped" || pos.exitReason !== "resolution") ? (
+          // stopped status OR old pre-fix closed trades that were actually edge_decay/stop_loss
           <span className="trade-status-stopped" title={pos.exitReason ?? "stopped"}>
-            {pos.exitReason === "stop_loss" ? "STOP" : pos.exitReason === "take_profit" ? "TP" : pos.exitReason === "edge_decay" ? "DECAY" : "STOPPED"}
+            {pos.exitReason === "stop_loss" ? "STOP" : pos.exitReason === "take_profit" ? "TP" : pos.exitReason === "edge_decay" ? "DECAY" : "CLOSED"}
           </span>
         ) : (
+          // resolution close — show actual market outcome
           <span className="trade-status-closed">
-            {pos.outcome === 1 ? "YES" : "NO"}
+            {pos.outcome === 1 ? "YES" : pos.outcome === 0 ? "NO" : "—"}
           </span>
         )}
       </td>

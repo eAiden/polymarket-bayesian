@@ -545,7 +545,7 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
 
   // JOIN trades with markets to get market question + current price for mark-to-market
   const rows = await db`
-    SELECT t.*, m.question AS market_question, m.yes_prob_pct
+    SELECT t.*, m.question AS market_question, m.yes_prob_pct, m.resolved_outcome AS market_outcome
     FROM trades t
     LEFT JOIN markets m ON m.id = t.market_id
     ORDER BY t.opened_at ASC
@@ -596,6 +596,16 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
       }
     }
 
+    const pnlUsd = r.pnl_usd != null ? (r.pnl_usd as number) : undefined;
+    const pnlPct = pnlUsd != null && sizeUsd > 0
+      ? Math.round(pnlUsd / sizeUsd * 100 * 10) / 10
+      : undefined;
+
+    // Market resolution outcome from the markets table (null if unresolved)
+    const marketOutcome = r.market_outcome != null
+      ? (Math.round(r.market_outcome as number) as 0 | 1)
+      : undefined;
+
     return {
       id: String(r.id),
       marketId: r.market_id as string,
@@ -610,7 +620,9 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
       exitPrice: r.exit_prob != null ? (r.exit_prob as number) : undefined,
       exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
       exitReason: r.close_reason as "resolution" | "stop_loss" | "edge_decay" | "take_profit" | undefined,
-      pnl: r.pnl_usd != null ? (r.pnl_usd as number) : undefined,
+      pnl: pnlUsd,
+      pnlPct,
+      outcome: marketOutcome,
       currentPrice,
       unrealizedPnl,
     };
