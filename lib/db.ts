@@ -523,9 +523,9 @@ const DEFAULT_BANKROLL = 10_000;
 export async function getPaperTradingState(): Promise<PaperTradingState> {
   const db = sql();
 
-  // JOIN trades with markets to get market question
+  // JOIN trades with markets to get market question + current price for mark-to-market
   const rows = await db`
-    SELECT t.*, m.question AS market_question
+    SELECT t.*, m.question AS market_question, m.yes_prob_pct
     FROM trades t
     LEFT JOIN markets m ON m.id = t.market_id
     ORDER BY t.opened_at ASC
@@ -555,13 +555,28 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
     const edgeAtEntry = r.entry_edge as number;
     const entryProb = r.entry_prob as number;
     const sizeUsd = r.size_usd as number;
-    // Reconstruct Kelly fraction: size / bankroll (approximate)
+    const direction = (r.direction as string).toUpperCase() as "YES" | "NO";
     const kellyFraction = Math.round((sizeUsd / DEFAULT_BANKROLL) * 10000) / 10000;
+
+    // Mark-to-market unrealized P&L for open positions
+    // Uses current yes_prob_pct from the markets JOIN
+    let unrealizedPnl: number | undefined;
+    if (r.status === "open" && r.yes_prob_pct != null) {
+      const currentProb = r.yes_prob_pct as number;
+      // Entry share price: YES side pays entryProb cents per share, NO side pays (100-entryProb) cents
+      const entrySharePrice = direction === "YES" ? entryProb : 100 - entryProb;
+      // Current share price: YES share worth currentProb, NO share worth (100-currentProb)
+      const currentSharePrice = direction === "YES" ? currentProb : 100 - currentProb;
+      if (entrySharePrice > 0) {
+        unrealizedPnl = Math.round(sizeUsd * (currentSharePrice - entrySharePrice) / entrySharePrice * 100) / 100;
+      }
+    }
+
     return {
       id: String(r.id),
       marketId: r.market_id as string,
       marketQuestion: (r.market_question as string | null) ?? "",
-      side: (r.direction as string).toUpperCase() as "YES" | "NO",
+      side: direction,
       entryPrice: entryProb,
       entryTimestamp: (r.opened_at as Date).toISOString(),
       edgeAtEntry,
@@ -572,6 +587,7 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
       exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
       exitReason: r.close_reason ? "resolution" as const : undefined,
       pnl: r.pnl_usd != null ? (r.pnl_usd as number) : undefined,
+      unrealizedPnl,
     };
   };
 
