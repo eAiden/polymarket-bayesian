@@ -574,6 +574,7 @@ export function Dashboard({ initialData }: DashboardProps) {
                     <th scope="col">Market</th>
                     <th scope="col">Side</th>
                     <th scope="col">Entry</th>
+                    <th scope="col">Now</th>
                     <th scope="col">Size</th>
                     <th scope="col">Edge</th>
                     <th scope="col">Kelly</th>
@@ -627,6 +628,14 @@ function TradeRow({ pos }: { pos: PaperPosition }) {
         <span className="trade-side" style={{ color: sideColor }}>{pos.side}</span>
       </td>
       <td>{pos.entryPrice}%{pos.exitPrice != null && <span style={{ color: "var(--muted)", fontSize: 10 }}> → {pos.exitPrice}%</span>}</td>
+      <td style={{
+        color: pos.currentPrice == null ? "var(--muted)"
+          : pos.side === "YES"
+            ? (pos.currentPrice > pos.entryPrice ? "var(--green)" : pos.currentPrice < pos.entryPrice ? "var(--red)" : "var(--muted)")
+            : (pos.currentPrice < pos.entryPrice ? "var(--green)" : pos.currentPrice > pos.entryPrice ? "var(--red)" : "var(--muted)"),
+      }}>
+        {pos.currentPrice != null ? `${pos.currentPrice}%` : "—"}
+      </td>
       <td>${pos.notionalSize.toFixed(0)}</td>
       <td style={{ color: Math.abs(pos.edgeAtEntry) > 10 ? "var(--green)" : "var(--muted)" }}>
         {edgeSign}{pos.edgeAtEntry.toFixed(1)}pp

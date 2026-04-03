@@ -30,6 +30,7 @@ export interface PaperPosition {
   pnlPct?: number;
   outcome?: 1 | 0;
   edgeHistory?: EdgeUpdate[];   // track how edge evolves over time
+  currentPrice?: number;        // current YES probability % (live from markets table)
   unrealizedPnl?: number;       // mark-to-market P&L while open
 }
 

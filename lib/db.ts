@@ -560,9 +560,10 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
 
     // Mark-to-market unrealized P&L for open positions
     // Uses current yes_prob_pct from the markets JOIN
+    const currentPrice = r.yes_prob_pct != null ? (r.yes_prob_pct as number) : undefined;
     let unrealizedPnl: number | undefined;
-    if (r.status === "open" && r.yes_prob_pct != null) {
-      const currentProb = r.yes_prob_pct as number;
+    if (r.status === "open" && currentPrice != null) {
+      const currentProb = currentPrice;
       // Entry share price: YES side pays entryProb cents per share, NO side pays (100-entryProb) cents
       const entrySharePrice = direction === "YES" ? entryProb : 100 - entryProb;
       // Current share price: YES share worth currentProb, NO share worth (100-currentProb)
@@ -587,6 +588,7 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
       exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
       exitReason: r.close_reason ? "resolution" as const : undefined,
       pnl: r.pnl_usd != null ? (r.pnl_usd as number) : undefined,
+      currentPrice,
       unrealizedPnl,
     };
   };

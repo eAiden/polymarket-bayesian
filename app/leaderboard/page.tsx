@@ -218,7 +218,7 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
               <thead>
                 <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                  {["Market", "Side", "Edge at Entry", "Entry Price", "Notional", "Unrealized P&L", "Last Signal"].map(h => (
+                  {["Market", "Side", "Edge at Entry", "Entry", "Now", "Notional", "Unrealized P&L", "Last Signal"].map(h => (
                     <th key={h} scope="col" style={thStyle}>{h}</th>
                   ))}
                 </tr>
@@ -239,7 +239,10 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
                       <td style={{ ...tdStyle, color: p.edgeAtEntry >= 0 ? T.green : T.red }}>
                         {p.edgeAtEntry > 0 ? "+" : ""}{p.edgeAtEntry.toFixed(1)}pp
                       </td>
-                      <td style={{ ...tdStyle, color: T.muted }}>{p.entryPrice.toFixed(1)}¢</td>
+                      <td style={{ ...tdStyle, color: T.muted }}>{p.entryPrice.toFixed(1)}%</td>
+                      <td style={{ ...tdStyle, color: p.currentPrice == null ? T.muted : p.side === "YES" ? (p.currentPrice > p.entryPrice ? T.green : p.currentPrice < p.entryPrice ? T.red : T.muted) : (p.currentPrice < p.entryPrice ? T.green : p.currentPrice > p.entryPrice ? T.red : T.muted) }}>
+                        {p.currentPrice != null ? `${p.currentPrice.toFixed(1)}%` : "—"}
+                      </td>
                       <td style={{ ...tdStyle, color: T.muted }}>${p.notionalSize.toFixed(2)}</td>
                       <td style={{ ...tdStyle, color: (p.unrealizedPnl ?? 0) >= 0 ? T.green : T.red }}>
                         {fmt$(p.unrealizedPnl ?? 0)}
@@ -280,8 +283,8 @@ export default async function LeaderboardPage({ searchParams }: { searchParams?:
                     <td style={tdStyle}>
                       <span style={{ color: p.side === "YES" ? T.green : T.red, fontWeight: 700 }}>{p.side}</span>
                     </td>
-                    <td style={{ ...tdStyle, color: T.muted }}>{p.entryPrice.toFixed(1)}¢</td>
-                    <td style={{ ...tdStyle, color: T.muted }}>{p.exitPrice !== undefined ? `${p.exitPrice.toFixed(1)}¢` : "—"}</td>
+                    <td style={{ ...tdStyle, color: T.muted }}>{p.entryPrice.toFixed(1)}%</td>
+                    <td style={{ ...tdStyle, color: T.muted }}>{p.exitPrice !== undefined ? `${p.exitPrice.toFixed(1)}%` : "—"}</td>
                     <td style={{ ...tdStyle, fontWeight: 600, color: (p.pnl ?? 0) >= 0 ? T.green : T.red }}>
                       {fmt$(p.pnl ?? 0)}
                     </td>
