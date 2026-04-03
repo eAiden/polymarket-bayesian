@@ -125,7 +125,7 @@ const tdStyle: React.CSSProperties = {
 
 const sectionHeading: React.CSSProperties = {
   fontSize: 13, fontWeight: 700, marginBottom: 14, color: T.text,
-  letterSpacing: "-0.1px", fontFamily: T.sans,
+  fontFamily: T.sans,
   textTransform: "uppercase", letterSpacing: "0.06em",
 };
 
