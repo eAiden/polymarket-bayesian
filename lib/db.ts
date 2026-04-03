@@ -169,6 +169,7 @@ export async function migrate(): Promise<void> {
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_trade_id ON trade_features(trade_id)`;
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_market_id ON trade_features(market_id)`;
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_outcome ON trade_features(outcome) WHERE outcome IS NOT NULL`;
+  await db`CREATE INDEX IF NOT EXISTS idx_trade_features_pending_outcome ON trade_features(market_id) WHERE outcome IS NULL`;
 }
 
 // ─── Markets ─────────────────────────────────────────────────────────────────

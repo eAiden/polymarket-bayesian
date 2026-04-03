@@ -15,6 +15,14 @@ import { fetchEnrichment, extractSignalsBatch } from "./signal-extraction";
 import { computeFeatures } from "./features";
 import { processResolvedMarkets } from "./resolution";
 import type { MarketEnrichment } from "./types";
+import {
+  NEAR_RESOLUTION_LONG_PCT,
+  NEAR_RESOLUTION_SHORT_PCT,
+  EDGE_DECAY_THRESHOLD_PP,
+  EDGE_OPEN_THRESHOLD_PP,
+  STALE_THESIS_EDGE_PP,
+  STALE_THESIS_DAYS,
+} from "./constants";
 
 export type ScanProgressCallback = (event: ScanEvent) => void;
 
@@ -46,27 +54,27 @@ function checkExitRules(
   const absEdge = Math.abs(edgePct);
 
   // 1. Near-resolution take profit: lock in win when market moved strongly in our favour
-  //    before the 98%/2% formal resolution threshold fires.
+  //    before the formal resolution threshold fires.
   const nearResolution =
-    (trade.direction === "NO" && currentYesProb <= 8) ||
-    (trade.direction === "YES" && currentYesProb >= 92);
+    (trade.direction === "NO" && currentYesProb <= NEAR_RESOLUTION_SHORT_PCT) ||
+    (trade.direction === "YES" && currentYesProb >= NEAR_RESOLUTION_LONG_PCT);
   if (nearResolution) {
     return { shouldExit: true, reason: "take_profit", exitLabel: "near-resolution take profit" };
   }
 
-  // 2. Edge decay: model lost conviction (edge flipped direction or fell below 2pp)
+  // 2. Edge decay: model lost conviction (edge flipped direction or fell below threshold)
   const edgeFlipped =
     (trade.direction === "YES" && edgePct < 0) ||
     (trade.direction === "NO" && edgePct > 0);
-  const edgeGone = absEdge < 2;
+  const edgeGone = absEdge < EDGE_DECAY_THRESHOLD_PP;
   if (edgeFlipped || edgeGone) {
-    const label = edgeFlipped ? "edge flipped" : "edge < 2pp";
+    const label = edgeFlipped ? "edge flipped" : `edge < ${EDGE_DECAY_THRESHOLD_PP}pp`;
     return { shouldExit: true, reason: "edge_decay", exitLabel: label };
   }
 
-  // 3. Time-based stop: thesis is stale (open >45 days with weak edge < 5pp)
+  // 3. Time-based stop: thesis is stale (open >STALE_THESIS_DAYS with weak edge)
   const ageDays = (Date.now() - new Date(trade.openedAt).getTime()) / 86_400_000;
-  if (ageDays > 45 && absEdge < 5) {
+  if (ageDays > STALE_THESIS_DAYS && absEdge < STALE_THESIS_EDGE_PP) {
     return { shouldExit: true, reason: "stop_loss", exitLabel: `stale thesis (${Math.round(ageDays)}d, edge=${edgePct > 0 ? "+" : ""}${edgePct}pp)` };
   }
 
@@ -167,7 +175,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
       const direction = edgePct >= 0 ? "YES" : "NO";
       const absEdge = Math.abs(edgePct);
-      const confidence = absEdge >= 10 ? "high" : absEdge >= 5 ? "medium" : "low";
+      const confidence = absEdge >= 10 ? "high" : absEdge >= EDGE_OPEN_THRESHOLD_PP ? "medium" : "low";
 
       // Insert signal
       await insertSignal({
@@ -208,7 +216,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       }
 
       // Paper trading: open position if edge is actionable and none open
-      if (absEdge >= 5 && confidence !== "low") {
+      if (absEdge >= EDGE_OPEN_THRESHOLD_PP && confidence !== "low") {
         if (!openTradesByMarket.has(market.id)) {
           const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
           const sizeUsd = Math.max(1, notional); // at least $1 if Kelly rounds to 0
@@ -336,7 +344,7 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
   const edgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
   const direction = edgePct >= 0 ? "YES" : "NO";
   const absEdge = Math.abs(edgePct);
-  const confidence = absEdge >= 10 ? "high" : absEdge >= 5 ? "medium" : "low";
+  const confidence = absEdge >= 10 ? "high" : absEdge >= EDGE_OPEN_THRESHOLD_PP ? "medium" : "low";
 
   await insertSignal({
     marketId,
@@ -372,7 +380,7 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
   }
 
   // Open paper trade on news-triggered re-analysis too
-  if (absEdge >= 5 && confidence !== "low") {
+  if (absEdge >= EDGE_OPEN_THRESHOLD_PP && confidence !== "low") {
     const alreadyOpen = openTrades.some(t => t.marketId === marketId);
     if (!alreadyOpen) {
       const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);

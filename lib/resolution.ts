@@ -3,6 +3,7 @@
 
 import { sql, markResolved, insertCalibration, getLatestSignal, getOpenTrades, closeTrade, backfillTradeOutcomes } from "./db";
 import { fetchMarketPrice } from "./polymarket";
+import { RESOLUTION_YES_PCT, RESOLUTION_NO_PCT } from "./constants";
 
 export async function processResolvedMarkets(): Promise<{ resolved: number; errors: string[] }> {
   const db = sql();
@@ -34,9 +35,9 @@ export async function processResolvedMarkets(): Promise<{ resolved: number; erro
       }
 
       let outcome: 0 | 1 | null = null;
-      if (price >= 98) {
+      if (price >= RESOLUTION_YES_PCT) {
         outcome = 1; // YES resolved
-      } else if (price <= 2) {
+      } else if (price <= RESOLUTION_NO_PCT) {
         outcome = 0; // NO resolved
       } else {
         // Not yet fully resolved — skip
