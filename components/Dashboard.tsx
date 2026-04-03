@@ -222,6 +222,7 @@ export function Dashboard({ initialData }: DashboardProps) {
       .map(p => [p.marketId, p])
   );
   const openPositions = allPositions.filter(p => p.status === "open");
+  const totalUnrealizedPnl = openPositions.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
   const closedPositions = allPositions.filter(p => p.status === "closed");
   const stoppedPositions = allPositions.filter(p => p.status === "stopped");
   const filteredPositions = tradeFilter === "open" ? openPositions
@@ -505,11 +506,19 @@ export function Dashboard({ initialData }: DashboardProps) {
                   <span className="trades-stat-value">${pt.currentBankroll.toFixed(0)}</span>
                 </div>
                 <div className="trades-stat">
-                  <span className="trades-stat-label">Total P&L</span>
+                  <span className="trades-stat-label">Realized P&L</span>
                   <span className="trades-stat-value" style={{
                     color: pt.totalPnl > 0 ? "var(--green)" : pt.totalPnl < 0 ? "var(--red)" : "var(--text)"
                   }}>
                     {pt.totalPnl >= 0 ? "+" : ""}${pt.totalPnl.toFixed(2)}
+                  </span>
+                </div>
+                <div className="trades-stat">
+                  <span className="trades-stat-label">Unrealized P&L</span>
+                  <span className="trades-stat-value" style={{
+                    color: totalUnrealizedPnl > 0 ? "var(--green)" : totalUnrealizedPnl < 0 ? "var(--red)" : "var(--text)"
+                  }}>
+                    {totalUnrealizedPnl >= 0 ? "+" : ""}${totalUnrealizedPnl.toFixed(2)}
                   </span>
                 </div>
                 <div className="trades-stat">
