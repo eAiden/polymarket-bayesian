@@ -6,7 +6,8 @@ import { fetchFilteredMarkets, fetchMarketPrice } from "./polymarket";
 import { kellySize } from "./paper-trading";
 import {
   acquireScanLock, releaseScanLock, upsertMarket,
-  insertSignal, appendPriceHistory, batchAppendPriceHistory, touchMarketScan,
+  insertSignal, appendPriceHistory, batchAppendPriceHistory,
+  touchMarketScan, batchTouchMarketScan,
   getMarketStore, openTrade, getOpenTrades, closeTrade,
   updateMarketPrice, insertTradeFeatures,
 } from "./db";
@@ -14,7 +15,8 @@ import { signalsToLikelihoodRatio, bayesianUpdate, credibleInterval } from "./ba
 import { fetchEnrichment, extractSignalsBatch } from "./signal-extraction";
 import { computeFeatures } from "./features";
 import { processResolvedMarkets } from "./resolution";
-import type { MarketEnrichment } from "./types";
+import type { MarketEnrichment, ExtractedSignal } from "./types";
+import type { CrossMarketMatch } from "./crossmarket";
 import {
   NEAR_RESOLUTION_LONG_PCT,
   NEAR_RESOLUTION_SHORT_PCT,
@@ -22,6 +24,7 @@ import {
   EDGE_OPEN_THRESHOLD_PP,
   STALE_THESIS_EDGE_PP,
   STALE_THESIS_DAYS,
+  edgeToConfidence,
 } from "./constants";
 
 export type ScanProgressCallback = (event: ScanEvent) => void;
@@ -79,6 +82,30 @@ function checkExitRules(
   }
 
   return null;
+}
+
+// Shared helper — saves feature vector for model training at trade-open time.
+// Wrapped in try/catch so a feature-save failure never blocks the trade open.
+async function saveTradeFeatures(
+  tradeId: number,
+  marketId: string,
+  signal: ExtractedSignal,
+  yesProbPct: number,
+  enrichment: MarketEnrichment,
+  crossMatches: CrossMarketMatch[],
+  edgePct: number,
+  direction: string,
+  logPrefix: string,
+): Promise<void> {
+  try {
+    const features = computeFeatures(
+      signal, yesProbPct, enrichment,
+      crossMatches, enrichment.calibrationBias?.avgEdgeBias ?? 0,
+    );
+    await insertTradeFeatures(tradeId, marketId, features as unknown as Record<string, unknown>, edgePct, direction, yesProbPct);
+  } catch (e) {
+    console.warn(`[${logPrefix}] Failed to save trade features for trade #${tradeId}:`, e);
+  }
 }
 
 export async function runScanPipeline(onProgress?: ScanProgressCallback): Promise<{
@@ -162,6 +189,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
     // 8. Process each signal result
     const priceHistoryBatch: Array<{ marketId: string; marketProb: number; fairProb?: number }> = [];
+    const touchedMarketIds: string[] = [];
 
     for (const market of filtered) {
       const result = signalResults.get(market.id);
@@ -175,7 +203,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
       const direction = edgePct >= 0 ? "YES" : "NO";
       const absEdge = Math.abs(edgePct);
-      const confidence = absEdge >= 10 ? "high" : absEdge >= EDGE_OPEN_THRESHOLD_PP ? "medium" : "low";
+      const confidence = edgeToConfidence(absEdge);
 
       // Insert signal
       await insertSignal({
@@ -195,11 +223,9 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         triggerType: "full_scan",
       });
 
-      // Collect for batch price history flush after the loop
+      // Collect for batch flushes after the loop
       priceHistoryBatch.push({ marketId: market.id, marketProb: market.yesProbPct, fairProb: posteriorProb });
-
-      // Touch last_scan_at
-      await touchMarketScan(market.id);
+      touchedMarketIds.push(market.id);
 
       // Exit rules: take profit / edge decay / time-based stop
       const existingTrade = openTradesByMarket.get(market.id);
@@ -239,16 +265,11 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
           console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, size=$${sizeUsd})`);
 
           // Save feature vector for model training
-          try {
-            const enrichment = enrichmentMap.get(market.id) ?? {};
-            const features = computeFeatures(
-              result.signal, market.yesProbPct, enrichment,
-              result.crossMatches, enrichment.calibrationBias?.avgEdgeBias ?? 0,
-            );
-            await insertTradeFeatures(tradeId, market.id, features as unknown as Record<string, unknown>, edgePct, direction, market.yesProbPct);
-          } catch (e) {
-            console.warn(`[pipeline] Failed to save trade features for trade #${tradeId}:`, e);
-          }
+          await saveTradeFeatures(
+            tradeId, market.id, result.signal, market.yesProbPct,
+            enrichmentMap.get(market.id) ?? {}, result.crossMatches,
+            edgePct, direction, "pipeline",
+          );
         }
       }
 
@@ -264,8 +285,9 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       void ci; // credible interval available but not stored in this schema version
     }
 
-    // Flush all price history entries in a single batch (2 queries vs N*2)
+    // Flush batched writes (2 queries for price history, 1 for scan timestamps)
     await batchAppendPriceHistory(priceHistoryBatch);
+    await batchTouchMarketScan(touchedMarketIds);
 
     // 9. Update prices for markets NOT in this scan
     const scannedIds = new Set(filtered.map(m => m.id));
@@ -277,19 +299,24 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       console.log(`[pipeline] Updating prices for ${unscanned.length} other tracked markets...`);
 
       const PRICE_BATCH = 5;
+      const unscannedPriceBatch: Array<{ marketId: string; marketProb: number }> = [];
+
       for (let i = 0; i < unscanned.length; i += PRICE_BATCH) {
         const batch = unscanned.slice(i, i + PRICE_BATCH);
         await Promise.allSettled(batch.map(async m => {
           const price = await fetchMarketPrice(m.id);
           if (price !== null) {
             await updateMarketPrice(m.id, price);
-            await appendPriceHistory(m.id, price);
+            unscannedPriceBatch.push({ marketId: m.id, marketProb: price });
           }
         }));
         if (i + PRICE_BATCH < unscanned.length) {
           await new Promise(r => setTimeout(r, 200));
         }
       }
+
+      // Batch-insert all collected price history in one shot
+      await batchAppendPriceHistory(unscannedPriceBatch);
     }
 
     const finalStore = await getMarketStore();
@@ -344,7 +371,7 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
   const edgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
   const direction = edgePct >= 0 ? "YES" : "NO";
   const absEdge = Math.abs(edgePct);
-  const confidence = absEdge >= 10 ? "high" : absEdge >= EDGE_OPEN_THRESHOLD_PP ? "medium" : "low";
+  const confidence = edgeToConfidence(absEdge);
 
   await insertSignal({
     marketId,
@@ -393,15 +420,11 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
       });
 
       // Save feature vector for model training
-      try {
-        const features = computeFeatures(
-          result.signal, market.yesProbPct, enrichment,
-          result.crossMatches, enrichment.calibrationBias?.avgEdgeBias ?? 0,
-        );
-        await insertTradeFeatures(tradeId, marketId, features as unknown as Record<string, unknown>, edgePct, direction, market.yesProbPct);
-      } catch (e) {
-        console.warn(`[reanalyze] Failed to save trade features for trade #${tradeId}:`, e);
-      }
+      await saveTradeFeatures(
+        tradeId, marketId, result.signal, market.yesProbPct,
+        enrichment, result.crossMatches,
+        edgePct, direction, "reanalyze",
+      );
     }
   }
 

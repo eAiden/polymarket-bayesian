@@ -6,6 +6,7 @@ import type { FilteredMarket, TrackedMarket, MarketStore, NewsAlert } from "./ty
 import type { CalibrationSummary } from "./calibration";
 import type { PaperTradingState, PaperPosition } from "./paper-trading";
 import type { NewsHeadline } from "./news";
+import { edgeToConfidence } from "./constants";
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
@@ -170,6 +171,16 @@ export async function migrate(): Promise<void> {
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_market_id ON trade_features(market_id)`;
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_outcome ON trade_features(outcome) WHERE outcome IS NOT NULL`;
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_pending_outcome ON trade_features(market_id) WHERE outcome IS NULL`;
+
+  // One-time data migration: fix trades closed by model-driven exits before the
+  // status='stopped' distinction was introduced. Safe to re-run — second pass finds 0 rows.
+  await db`
+    UPDATE trades
+    SET status = 'stopped'
+    WHERE status = 'closed'
+      AND close_reason IS NOT NULL
+      AND close_reason != 'resolution'
+  `;
 }
 
 // ─── Markets ─────────────────────────────────────────────────────────────────
@@ -222,6 +233,13 @@ export async function updateMarketPrice(marketId: string, yesProbPct: number): P
 export async function touchMarketScan(marketId: string): Promise<void> {
   const db = sql();
   await db`UPDATE markets SET last_scan_at = NOW() WHERE id = ${marketId}`;
+}
+
+// Batch variant — single UPDATE for all scanned markets instead of N round-trips.
+export async function batchTouchMarketScan(marketIds: string[]): Promise<void> {
+  if (marketIds.length === 0) return;
+  const db = sql();
+  await db`UPDATE markets SET last_scan_at = NOW() WHERE id = ANY(${marketIds})`;
 }
 
 export async function markResolved(marketId: string, outcome: 0 | 1): Promise<void> {
@@ -442,7 +460,7 @@ export async function getMarketStore(): Promise<MarketStore> {
     const fairProb = Math.max(1, Math.min(99, Math.round(posteriorProb)));
     const edge = Math.round(edgePct * 10) / 10;
     const absEdge = Math.abs(edge);
-    const edgeLevel: TrackedMarket["edgeLevel"] = absEdge >= 10 ? "high" : absEdge >= 5 ? "medium" : "low";
+    const edgeLevel: TrackedMarket["edgeLevel"] = edgeToConfidence(absEdge);
     const direction = (signal?.direction ?? "YES") as "YES" | "NO";
     const confidence = (signal?.confidence ?? "low") as "high" | "medium" | "low";
     const resolved = m.resolved_outcome != null;

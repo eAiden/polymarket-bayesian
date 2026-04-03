@@ -24,3 +24,13 @@ export const STALE_THESIS_EDGE_PP = 5;
 // ─── Time-based stop ─────────────────────────────────────────────────────────
 /** Days a position can remain open before triggering the stale-thesis stop (when edge < STALE_THESIS_EDGE_PP) */
 export const STALE_THESIS_DAYS = 45;
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Maps absolute edge in pp to a confidence tier.
+ * Used in both pipeline.ts and db.ts — single definition avoids drift.
+ */
+export function edgeToConfidence(absEdge: number): "high" | "medium" | "low" {
+  return absEdge >= 10 ? "high" : absEdge >= EDGE_OPEN_THRESHOLD_PP ? "medium" : "low";
+}
