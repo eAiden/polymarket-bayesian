@@ -337,26 +337,8 @@ export async function getMarketStore(): Promise<MarketStore> {
   `;
   const signalMap = new Map(latestSignals.map(s => [s.market_id as string, s]));
 
-  // Price history: last 60 rows per market
-  const historyRows = await db`
-    SELECT ph.*
-    FROM price_history ph
-    INNER JOIN (
-      SELECT market_id, MAX(id) as max_id
-      FROM (
-        SELECT market_id, id FROM price_history
-        WHERE market_id = ANY(${marketIds})
-        ORDER BY market_id, recorded_at DESC
-      ) sub
-      GROUP BY market_id
-    ) latest ON ph.market_id = latest.market_id
-    WHERE ph.market_id = ANY(${marketIds})
-    ORDER BY ph.market_id, ph.recorded_at ASC
-  `;
-
-  // Build history map: last 60 per market
+  // Price history per market (last 60 points, trimmed after fetch)
   const historyMap = new Map<string, Array<{ date: string; marketProb: number; fairProb?: number }>>();
-  // Fetch properly
   const historyRaw = await db`
     SELECT market_id, recorded_at, market_prob, fair_prob
     FROM price_history

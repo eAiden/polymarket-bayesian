@@ -48,6 +48,18 @@ export async function runNewsMonitor(): Promise<{
   alertsFound: number;
   marketsReanalyzed: number;
 }> {
+  // Pre-populate seenHeadlines from DB on first run so we don't re-fire
+  // every past headline as "new" after a Railway restart/redeploy.
+  if (seenHeadlines.size === 0) {
+    const recent = await getNewsAlerts(500);
+    for (const a of recent) {
+      seenHeadlines.add(`${a.headline}|${a.source}`.toLowerCase());
+    }
+    if (recent.length > 0) {
+      console.log(`[news-monitor] Pre-loaded ${seenHeadlines.size} seen headlines from DB`);
+    }
+  }
+
   const store = await getMarketStore();
   if (store.markets.length === 0) {
     return { marketsChecked: 0, alertsFound: 0, marketsReanalyzed: 0 };
