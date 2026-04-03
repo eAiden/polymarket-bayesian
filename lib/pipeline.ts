@@ -202,6 +202,8 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
           await closeTrade(existingTrade.id, market.yesProbPct, pnl, exit.reason);
           openTradesByMarket.delete(market.id);
           console.log(`[pipeline] Exit (${exit.exitLabel}): closed trade #${existingTrade.id} on "${market.question.slice(0, 40)}" (P&L=$${pnl})`);
+          // Don't reopen on the same scan cycle that triggered the close
+          continue;
         }
       }
 
@@ -217,7 +219,15 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
             entryEdge: edgePct,
             sizeUsd,
           });
-          openTradesByMarket.set(market.id, { marketId: market.id, direction } as any);
+          openTradesByMarket.set(market.id, {
+            id: tradeId,
+            marketId: market.id,
+            direction,
+            entryProb: market.yesProbPct,
+            entryEdge: edgePct,
+            sizeUsd,
+            openedAt: new Date().toISOString(),
+          });
           console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, size=$${sizeUsd})`);
 
           // Save feature vector for model training
@@ -225,7 +235,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
             const enrichment = enrichmentMap.get(market.id) ?? {};
             const features = computeFeatures(
               result.signal, market.yesProbPct, enrichment,
-              result.crossMatches, 0, // categoryBias=0; backfilled from calibration at training time
+              result.crossMatches, enrichment.calibrationBias?.avgEdgeBias ?? 0,
             );
             await insertTradeFeatures(tradeId, market.id, features as unknown as Record<string, unknown>, edgePct, direction, market.yesProbPct);
           } catch (e) {
@@ -249,7 +259,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
     // Flush all price history entries in a single batch (2 queries vs N*2)
     await batchAppendPriceHistory(priceHistoryBatch);
 
-    // 8. Update prices for markets NOT in this scan
+    // 9. Update prices for markets NOT in this scan
     const scannedIds = new Set(filtered.map(m => m.id));
     const trackedStore = await getMarketStore();
     const unscanned = trackedStore.markets.filter(m => !scannedIds.has(m.id) && !m.resolved);
@@ -378,7 +388,7 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
       try {
         const features = computeFeatures(
           result.signal, market.yesProbPct, enrichment,
-          result.crossMatches, 0,
+          result.crossMatches, enrichment.calibrationBias?.avgEdgeBias ?? 0,
         );
         await insertTradeFeatures(tradeId, marketId, features as unknown as Record<string, unknown>, edgePct, direction, market.yesProbPct);
       } catch (e) {

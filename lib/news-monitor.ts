@@ -51,12 +51,17 @@ export async function runNewsMonitor(): Promise<{
   // Pre-populate seenHeadlines from DB on first run so we don't re-fire
   // every past headline as "new" after a Railway restart/redeploy.
   if (seenHeadlines.size === 0) {
-    const recent = await getNewsAlerts(500);
-    for (const a of recent) {
-      seenHeadlines.add(`${a.headline}|${a.source}`.toLowerCase());
-    }
-    if (recent.length > 0) {
-      console.log(`[news-monitor] Pre-loaded ${seenHeadlines.size} seen headlines from DB`);
+    try {
+      const recent = await getNewsAlerts(500);
+      for (const a of recent) {
+        seenHeadlines.add(`${a.headline}|${a.source}`.toLowerCase());
+      }
+      if (recent.length > 0) {
+        console.log(`[news-monitor] Pre-loaded ${seenHeadlines.size} seen headlines from DB`);
+      }
+    } catch (err) {
+      // DB unavailable on cold start — proceed with empty set; duplicates will self-correct next run
+      console.warn("[news-monitor] Failed to pre-load seen headlines:", err instanceof Error ? err.message : err);
     }
   }
 

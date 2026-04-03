@@ -43,10 +43,16 @@ export async function processResolvedMarkets(): Promise<{ resolved: number; erro
         continue;
       }
 
-      // Mark resolved in DB and backfill training labels onto feature vectors
+      // Mark resolved in DB first — this is the authoritative state change
       await markResolved(market.id as string, outcome);
-      await backfillTradeOutcomes(market.id as string, outcome, price);
       console.log(`[resolution] "${(market.question as string).slice(0, 50)}" → outcome=${outcome} (price=${price}%)`);
+
+      // Backfill training labels onto feature vectors — non-critical, must not block trade closure
+      try {
+        await backfillTradeOutcomes(market.id as string, outcome, price);
+      } catch (backfillErr) {
+        console.error(`[resolution] backfillTradeOutcomes failed for ${market.id as string}:`, backfillErr instanceof Error ? backfillErr.message : backfillErr);
+      }
 
       // Get latest signal for calibration
       const signal = await getLatestSignal(market.id as string);
