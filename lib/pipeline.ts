@@ -92,7 +92,11 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
     let analyzed = 0;
 
-    // 7. Process each signal result
+    // 7. Pre-fetch all open trades once for edge decay checks
+    const allOpenTrades = await getOpenTrades();
+    const openTradesByMarket = new Map(allOpenTrades.map(t => [t.marketId, t]));
+
+    // 8. Process each signal result
     for (const market of filtered) {
       const result = signalResults.get(market.id);
       if (!result) continue;
@@ -131,11 +135,28 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       // Touch last_scan_at
       await touchMarketScan(market.id);
 
-      // Paper trading: open position if edge is actionable
+      // Edge decay stop: close trade if edge flipped or fell below 2pp
+      const existingTrade = openTradesByMarket.get(market.id);
+      if (existingTrade) {
+        const edgeFlipped = (existingTrade.direction === "YES" && edgePct < 0) ||
+                            (existingTrade.direction === "NO" && edgePct > 0);
+        const edgeGone = absEdge < 2;
+        if (edgeFlipped || edgeGone) {
+          const currentSharePrice = existingTrade.direction === "YES" ? market.yesProbPct : 100 - market.yesProbPct;
+          const entrySharePrice = existingTrade.direction === "YES" ? existingTrade.entryProb : 100 - existingTrade.entryProb;
+          const pnl = entrySharePrice > 0
+            ? Math.round(existingTrade.sizeUsd * (currentSharePrice - entrySharePrice) / entrySharePrice * 100) / 100
+            : 0;
+          await closeTrade(existingTrade.id, market.yesProbPct, pnl, "edge_decay");
+          openTradesByMarket.delete(market.id);
+          const reason = edgeFlipped ? "edge flipped" : "edge < 2pp";
+          console.log(`[pipeline] Edge decay (${reason}): closed trade #${existingTrade.id} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, P&L=$${pnl})`);
+        }
+      }
+
+      // Paper trading: open position if edge is actionable and none open
       if (absEdge >= 5 && confidence !== "low") {
-        const openTrades = await getOpenTrades();
-        const alreadyOpen = openTrades.some(t => t.marketId === market.id);
-        if (!alreadyOpen) {
+        if (!openTradesByMarket.has(market.id)) {
           const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
           const sizeUsd = Math.max(1, notional); // at least $1 if Kelly rounds to 0
           await openTrade({
@@ -145,6 +166,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
             entryEdge: edgePct,
             sizeUsd,
           });
+          openTradesByMarket.set(market.id, { marketId: market.id, direction } as any);
           console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, size=$${sizeUsd})`);
         }
       }
@@ -260,9 +282,28 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
   await appendPriceHistory(marketId, market.yesProbPct, posteriorProb);
   await touchMarketScan(marketId);
 
+  // Edge decay stop: close trade if edge flipped or fell below 2pp
+  const openTrades = await getOpenTrades();
+  const existingTrade = openTrades.find(t => t.marketId === marketId);
+  if (existingTrade) {
+    const edgeFlipped = (existingTrade.direction === "YES" && edgePct < 0) ||
+                        (existingTrade.direction === "NO" && edgePct > 0);
+    const edgeGone = absEdge < 2;
+    if (edgeFlipped || edgeGone) {
+      const currentSharePrice = existingTrade.direction === "YES" ? market.yesProbPct : 100 - market.yesProbPct;
+      const entrySharePrice = existingTrade.direction === "YES" ? existingTrade.entryProb : 100 - existingTrade.entryProb;
+      const pnl = entrySharePrice > 0
+        ? Math.round(existingTrade.sizeUsd * (currentSharePrice - entrySharePrice) / entrySharePrice * 100) / 100
+        : 0;
+      await closeTrade(existingTrade.id, market.yesProbPct, pnl, "edge_decay");
+      const reason = edgeFlipped ? "edge flipped" : "edge < 2pp";
+      console.log(`[reanalyze] Edge decay (${reason}): closed trade #${existingTrade.id} (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, P&L=$${pnl})`);
+      return; // don't re-open on same reanalysis that triggered the close
+    }
+  }
+
   // Open paper trade on news-triggered re-analysis too
   if (absEdge >= 5 && confidence !== "low") {
-    const openTrades = await getOpenTrades();
     const alreadyOpen = openTrades.some(t => t.marketId === marketId);
     if (!alreadyOpen) {
       const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
