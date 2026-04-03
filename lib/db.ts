@@ -492,10 +492,13 @@ export async function openTrade(t: {
 
 export async function closeTrade(tradeId: number, exitProb: number, pnlUsd: number, reason: string): Promise<void> {
   const db = sql();
+  // Non-resolution exits are "stopped" (edge decay, stop loss, take profit)
+  // so the UI can differentiate between a resolved market and a model-driven exit
+  const status = reason === "resolution" ? "closed" : "stopped";
   await db`
     UPDATE trades SET
       closed_at = NOW(), exit_prob = ${exitProb}, pnl_usd = ${pnlUsd},
-      close_reason = ${reason}, status = 'closed'
+      close_reason = ${reason}, status = ${status}
     WHERE id = ${tradeId}
   `;
 }
@@ -531,19 +534,22 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
     ORDER BY t.opened_at ASC
   `;
 
-  const closed = rows.filter(r => r.status === 'closed');
+  const settled = rows.filter(r => r.status === 'closed' || r.status === 'stopped');
   const open = rows.filter(r => r.status === 'open');
 
-  const totalPnl = closed.reduce((sum, r) => sum + ((r.pnl_usd as number) ?? 0), 0);
-  const wins = closed.filter(r => ((r.pnl_usd as number) ?? 0) > 0);
+  const totalPnl = settled.reduce((sum, r) => sum + ((r.pnl_usd as number) ?? 0), 0);
+  const wins = settled.filter(r => ((r.pnl_usd as number) ?? 0) > 0);
   // Store as 0–1 fraction — Dashboard renders (pt.winRate * 100)
-  const winRate = closed.length > 0 ? wins.length / closed.length : 0;
+  const winRate = settled.length > 0 ? wins.length / settled.length : 0;
 
-  // Compute max drawdown from starting bankroll
+  // Compute max drawdown from starting bankroll (across all settled trades, sorted by exit time)
+  const sortedSettled = [...settled].sort((a, b) =>
+    ((a.closed_at as Date)?.getTime() ?? 0) - ((b.closed_at as Date)?.getTime() ?? 0)
+  );
   let peak = DEFAULT_BANKROLL;
   let running = DEFAULT_BANKROLL;
   let maxDrawdown = 0;
-  for (const r of closed) {
+  for (const r of sortedSettled) {
     running += (r.pnl_usd as number) ?? 0;
     if (running > peak) peak = running;
     const dd = peak > 0 ? (peak - running) / peak : 0;
@@ -596,7 +602,7 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
   return {
     bankroll: DEFAULT_BANKROLL,
     currentBankroll: DEFAULT_BANKROLL + totalPnl,
-    positions: [...open.map(toPosition), ...closed.map(toPosition)],
+    positions: [...open.map(toPosition), ...settled.map(toPosition)],
     totalPnl: Math.round(totalPnl * 100) / 100,
     winRate: Math.round(winRate * 1000) / 1000, // 0–1 fraction
     maxDrawdown: Math.round(maxDrawdown * 10000) / 10000,
