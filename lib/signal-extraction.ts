@@ -34,6 +34,7 @@ export interface BatchedSignalResult {
   sources: string[];
   topFact: string;
   newsAge: "stale" | "recent" | "breaking";
+  crossMatches: CrossMarketMatch[];
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
@@ -211,7 +212,8 @@ function validateBatchItem(raw: Record<string, unknown>, market: FilteredMarket)
 
   const reasoning = typeof raw.reasoning === "string" ? raw.reasoning.slice(0, 600) : "";
 
-  return { signal, likelihoodRatio: lr, reasoning, keyFactors, sources, topFact, newsAge };
+  // crossMatches is populated by the caller after context is available
+  return { signal, likelihoodRatio: lr, reasoning, keyFactors, sources, topFact, newsAge, crossMatches: [] };
 }
 
 // ─── Enrichment fetch (unchanged from original) ───────────────────────────────
@@ -315,7 +317,7 @@ export async function extractSignalsBatch(
         continue;
       }
 
-      results.set(market.id, validated);
+      results.set(market.id, { ...validated, crossMatches: contexts[j].crossMatches });
       console.log(`[extract-batch] ${market.question.slice(0, 40)}: ${validated.signal.newsSignals.length} signals, lr=${validated.likelihoodRatio.toFixed(2)}, age=${validated.newsAge}`);
     }
   }
@@ -343,6 +345,6 @@ export async function extractSignals(
   const result = batchResult.get(market.id);
   if (!result) return null;
 
-  const crossMatches = await fetchCrossMarketData(market.question);
-  return { market, signal: result.signal, crossMatches, enrichment };
+  // crossMatches were already fetched inside extractSignalsBatch — no second fetch needed
+  return { market, signal: result.signal, crossMatches: result.crossMatches, enrichment };
 }

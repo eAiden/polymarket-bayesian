@@ -6,7 +6,7 @@ import { fetchFilteredMarkets, fetchMarketPrice } from "./polymarket";
 import { kellySize } from "./paper-trading";
 import {
   acquireScanLock, releaseScanLock, upsertMarket,
-  insertSignal, appendPriceHistory, touchMarketScan,
+  insertSignal, appendPriceHistory, batchAppendPriceHistory, touchMarketScan,
   getMarketStore, openTrade, getOpenTrades, closeTrade,
   updateMarketPrice,
 } from "./db";
@@ -97,6 +97,8 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
     const openTradesByMarket = new Map(allOpenTrades.map(t => [t.marketId, t]));
 
     // 8. Process each signal result
+    const priceHistoryBatch: Array<{ marketId: string; marketProb: number; fairProb?: number }> = [];
+
     for (const market of filtered) {
       const result = signalResults.get(market.id);
       if (!result) continue;
@@ -129,8 +131,8 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         triggerType: "full_scan",
       });
 
-      // Append price history
-      await appendPriceHistory(market.id, market.yesProbPct, posteriorProb);
+      // Collect for batch price history flush after the loop
+      priceHistoryBatch.push({ marketId: market.id, marketProb: market.yesProbPct, fairProb: posteriorProb });
 
       // Touch last_scan_at
       await touchMarketScan(market.id);
@@ -182,6 +184,9 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
       void ci; // credible interval available but not stored in this schema version
     }
+
+    // Flush all price history entries in a single batch (2 queries vs N*2)
+    await batchAppendPriceHistory(priceHistoryBatch);
 
     // 8. Update prices for markets NOT in this scan
     const scannedIds = new Set(filtered.map(m => m.id));

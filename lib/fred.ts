@@ -2,7 +2,8 @@ import type { FredData } from "./types";
 
 // FRED API — free, no key needed for JSON format
 const FRED_BASE = "https://api.stlouisfed.org/fred/series/observations";
-const FRED_API_KEY = "DEMO_KEY"; // FRED provides a demo key for low-volume usage
+// Use FRED_API_KEY env var if set; fall back to the public demo key for low-volume usage
+const FRED_API_KEY = process.env.FRED_API_KEY ?? "DEMO_KEY";
 
 // Cache: economic data changes slowly
 let cache: { data: FredData; expiry: number } | null = null;

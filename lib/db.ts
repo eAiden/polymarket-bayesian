@@ -314,6 +314,38 @@ export async function appendPriceHistory(marketId: string, marketProb: number, f
   `;
 }
 
+// Batch variant — 2 queries total regardless of how many markets.
+// Skips markets whose price hasn't changed since the last recorded entry.
+export async function batchAppendPriceHistory(
+  rows: Array<{ marketId: string; marketProb: number; fairProb?: number }>,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const db = sql();
+  const marketIds = rows.map(r => r.marketId);
+
+  // Fetch the most recent recorded price for every market in one query
+  const latestRows = await db`
+    SELECT DISTINCT ON (market_id) market_id, market_prob
+    FROM price_history
+    WHERE market_id = ANY(${marketIds})
+    ORDER BY market_id, recorded_at DESC
+  `;
+  const latestByMarket = new Map(latestRows.map(r => [r.market_id as string, r.market_prob as number]));
+
+  // Keep only rows where the price changed
+  const toInsert = rows.filter(r => latestByMarket.get(r.marketId) !== r.marketProb);
+  if (toInsert.length === 0) return;
+
+  await db`
+    INSERT INTO price_history (market_id, market_prob, fair_prob)
+    SELECT * FROM ${db(toInsert.map(r => ({
+      market_id: r.marketId,
+      market_prob: r.marketProb,
+      fair_prob: r.fairProb ?? null,
+    })))}
+  `;
+}
+
 // ─── Market Store (UI data) ───────────────────────────────────────────────────
 
 export async function getMarketStore(): Promise<MarketStore> {
