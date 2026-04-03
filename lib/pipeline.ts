@@ -17,6 +17,61 @@ import type { MarketEnrichment } from "./types";
 
 export type ScanProgressCallback = (event: ScanEvent) => void;
 
+// ─── Exit rule helpers ────────────────────────────────────────────────────────
+
+interface OpenTradeRef {
+  id: number;
+  marketId: string;
+  direction: string;
+  entryProb: number;
+  entryEdge: number;
+  sizeUsd: number;
+  openedAt: string;
+}
+
+function computePnl(trade: OpenTradeRef, currentYesProb: number): number {
+  const currentSharePrice = trade.direction === "YES" ? currentYesProb : 100 - currentYesProb;
+  const entrySharePrice = trade.direction === "YES" ? trade.entryProb : 100 - trade.entryProb;
+  return entrySharePrice > 0
+    ? Math.round(trade.sizeUsd * (currentSharePrice - entrySharePrice) / entrySharePrice * 100) / 100
+    : 0;
+}
+
+function checkExitRules(
+  trade: OpenTradeRef,
+  edgePct: number,
+  currentYesProb: number,
+): { shouldExit: boolean; reason: string; exitLabel: string } | null {
+  const absEdge = Math.abs(edgePct);
+
+  // 1. Near-resolution take profit: lock in win when market moved strongly in our favour
+  //    before the 98%/2% formal resolution threshold fires.
+  const nearResolution =
+    (trade.direction === "NO" && currentYesProb <= 8) ||
+    (trade.direction === "YES" && currentYesProb >= 92);
+  if (nearResolution) {
+    return { shouldExit: true, reason: "take_profit", exitLabel: "near-resolution take profit" };
+  }
+
+  // 2. Edge decay: model lost conviction (edge flipped direction or fell below 2pp)
+  const edgeFlipped =
+    (trade.direction === "YES" && edgePct < 0) ||
+    (trade.direction === "NO" && edgePct > 0);
+  const edgeGone = absEdge < 2;
+  if (edgeFlipped || edgeGone) {
+    const label = edgeFlipped ? "edge flipped" : "edge < 2pp";
+    return { shouldExit: true, reason: "edge_decay", exitLabel: label };
+  }
+
+  // 3. Time-based stop: thesis is stale (open >45 days with weak edge < 5pp)
+  const ageDays = (Date.now() - new Date(trade.openedAt).getTime()) / 86_400_000;
+  if (ageDays > 45 && absEdge < 5) {
+    return { shouldExit: true, reason: "stop_loss", exitLabel: `stale thesis (${Math.round(ageDays)}d, edge=${edgePct > 0 ? "+" : ""}${edgePct}pp)` };
+  }
+
+  return null;
+}
+
 export async function runScanPipeline(onProgress?: ScanProgressCallback): Promise<{
   marketsScanned: number;
   analyzed: number;
@@ -137,22 +192,15 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       // Touch last_scan_at
       await touchMarketScan(market.id);
 
-      // Edge decay stop: close trade if edge flipped or fell below 2pp
+      // Exit rules: take profit / edge decay / time-based stop
       const existingTrade = openTradesByMarket.get(market.id);
       if (existingTrade) {
-        const edgeFlipped = (existingTrade.direction === "YES" && edgePct < 0) ||
-                            (existingTrade.direction === "NO" && edgePct > 0);
-        const edgeGone = absEdge < 2;
-        if (edgeFlipped || edgeGone) {
-          const currentSharePrice = existingTrade.direction === "YES" ? market.yesProbPct : 100 - market.yesProbPct;
-          const entrySharePrice = existingTrade.direction === "YES" ? existingTrade.entryProb : 100 - existingTrade.entryProb;
-          const pnl = entrySharePrice > 0
-            ? Math.round(existingTrade.sizeUsd * (currentSharePrice - entrySharePrice) / entrySharePrice * 100) / 100
-            : 0;
-          await closeTrade(existingTrade.id, market.yesProbPct, pnl, "edge_decay");
+        const exit = checkExitRules(existingTrade, edgePct, market.yesProbPct);
+        if (exit) {
+          const pnl = computePnl(existingTrade, market.yesProbPct);
+          await closeTrade(existingTrade.id, market.yesProbPct, pnl, exit.reason);
           openTradesByMarket.delete(market.id);
-          const reason = edgeFlipped ? "edge flipped" : "edge < 2pp";
-          console.log(`[pipeline] Edge decay (${reason}): closed trade #${existingTrade.id} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, P&L=$${pnl})`);
+          console.log(`[pipeline] Exit (${exit.exitLabel}): closed trade #${existingTrade.id} on "${market.question.slice(0, 40)}" (P&L=$${pnl})`);
         }
       }
 
@@ -287,23 +335,16 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
   await appendPriceHistory(marketId, market.yesProbPct, posteriorProb);
   await touchMarketScan(marketId);
 
-  // Edge decay stop: close trade if edge flipped or fell below 2pp
+  // Exit rules: take profit / edge decay / time-based stop
   const openTrades = await getOpenTrades();
   const existingTrade = openTrades.find(t => t.marketId === marketId);
   if (existingTrade) {
-    const edgeFlipped = (existingTrade.direction === "YES" && edgePct < 0) ||
-                        (existingTrade.direction === "NO" && edgePct > 0);
-    const edgeGone = absEdge < 2;
-    if (edgeFlipped || edgeGone) {
-      const currentSharePrice = existingTrade.direction === "YES" ? market.yesProbPct : 100 - market.yesProbPct;
-      const entrySharePrice = existingTrade.direction === "YES" ? existingTrade.entryProb : 100 - existingTrade.entryProb;
-      const pnl = entrySharePrice > 0
-        ? Math.round(existingTrade.sizeUsd * (currentSharePrice - entrySharePrice) / entrySharePrice * 100) / 100
-        : 0;
-      await closeTrade(existingTrade.id, market.yesProbPct, pnl, "edge_decay");
-      const reason = edgeFlipped ? "edge flipped" : "edge < 2pp";
-      console.log(`[reanalyze] Edge decay (${reason}): closed trade #${existingTrade.id} (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, P&L=$${pnl})`);
-      return; // don't re-open on same reanalysis that triggered the close
+    const exit = checkExitRules(existingTrade, edgePct, market.yesProbPct);
+    if (exit) {
+      const pnl = computePnl(existingTrade, market.yesProbPct);
+      await closeTrade(existingTrade.id, market.yesProbPct, pnl, exit.reason);
+      console.log(`[reanalyze] Exit (${exit.exitLabel}): closed trade #${existingTrade.id} (P&L=$${pnl})`);
+      return; // don't re-open on same cycle that triggered the close
     }
   }
 
