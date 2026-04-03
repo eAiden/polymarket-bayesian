@@ -618,15 +618,19 @@ export function Dashboard({ initialData }: DashboardProps) {
 
 function TradeRow({ pos }: { pos: PaperPosition }) {
   const sideColor = pos.side === "YES" ? "var(--green)" : "var(--red)";
-  const edgeSign = pos.edgeAtEntry >= 0 ? "+" : "";
+  // Edge from the position's perspective: NO trades have negative edgePct (YES overpriced)
+  // but the edge *for the position* is positive — flip sign for NO
+  const directedEdge = pos.side === "NO" ? -pos.edgeAtEntry : pos.edgeAtEntry;
+  const edgeSign = directedEdge >= 0 ? "+" : "";
 
   // For open positions, show unrealized P&L; for closed/stopped, show realized
   const displayPnl = pos.status === "open" ? (pos.unrealizedPnl ?? 0) : (pos.pnl ?? 0);
   const pnlColor = displayPnl > 0 ? "var(--green)" : displayPnl < 0 ? "var(--red)" : "var(--muted)";
 
-  // Edge decay: compare current vs entry
-  const currentEdge = pos.currentEdge ?? pos.edgeAtEntry;
-  const edgeDecay = currentEdge - pos.edgeAtEntry;
+  // Edge decay: compare current vs entry (direction-adjusted)
+  const currentEdgeRaw = pos.currentEdge ?? pos.edgeAtEntry;
+  const currentEdge = pos.side === "NO" ? -currentEdgeRaw : currentEdgeRaw;
+  const edgeDecay = currentEdge - directedEdge;
 
   return (
     <tr className={pos.status !== "open" ? "trade-closed" : ""}>
@@ -646,8 +650,8 @@ function TradeRow({ pos }: { pos: PaperPosition }) {
         {pos.currentPrice != null ? `${pos.currentPrice}%` : "—"}
       </td>
       <td>${pos.notionalSize.toFixed(0)}</td>
-      <td style={{ color: Math.abs(pos.edgeAtEntry) > 10 ? "var(--green)" : "var(--muted)" }}>
-        {edgeSign}{pos.edgeAtEntry.toFixed(1)}pp
+      <td style={{ color: directedEdge > 10 ? "var(--green)" : "var(--muted)" }}>
+        {edgeSign}{directedEdge.toFixed(1)}pp
         {pos.status === "open" && edgeDecay !== 0 && (
           <span style={{ fontSize: 10, marginLeft: 2, color: edgeDecay < 0 ? "var(--red)" : "var(--green)" }}>
             ({edgeDecay > 0 ? "+" : ""}{edgeDecay.toFixed(1)})

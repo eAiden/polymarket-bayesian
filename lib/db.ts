@@ -586,7 +586,7 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
       status: r.status as "open" | "closed" | "stopped",
       exitPrice: r.exit_prob != null ? (r.exit_prob as number) : undefined,
       exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
-      exitReason: r.close_reason ? "resolution" as const : undefined,
+      exitReason: r.close_reason as "resolution" | "stop_loss" | "edge_decay" | "take_profit" | undefined,
       pnl: r.pnl_usd != null ? (r.pnl_usd as number) : undefined,
       currentPrice,
       unrealizedPnl,
