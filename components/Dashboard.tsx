@@ -292,7 +292,7 @@ export function Dashboard({ initialData }: DashboardProps) {
             )}
             {scanProgress.phase === "consistency" && (scanProgress.message ?? "Scoring...")}
             {scanProgress.phase === "saving" && (scanProgress.message ?? "Saving...")}
-            {scanProgress.phase === "done" && "Scan complete!"}
+            {scanProgress.phase === "done" && "Scan complete"}
           </div>
           {scanProgress.phase === "analyzing" && scanProgress.total && scanProgress.current && (
             <div className="progress-bar-wrap">
@@ -452,7 +452,7 @@ export function Dashboard({ initialData }: DashboardProps) {
                 onClick={() => setTriggerFilter(triggerFilter === "news_triggered" ? "all" : "news_triggered")}
                 title="Show only markets re-analyzed due to breaking news"
               >
-                ⚡ News triggered
+                News triggered
               </button>
               <label className="resolved-toggle">
                 <input

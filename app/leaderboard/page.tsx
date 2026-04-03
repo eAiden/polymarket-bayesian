@@ -21,8 +21,8 @@ const T = {
   red:     "#f85149",
   accent:  "#10b981",
   yellow:  "#e3b341",
-  sans:    "Inter, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif",
-  mono:    "ui-monospace, 'Fira Code', 'Cascadia Code', Menlo, Consolas, monospace",
+  sans:    "var(--font-sans, 'Plus Jakarta Sans', system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif)",
+  mono:    "var(--font-mono-face, 'JetBrains Mono', ui-monospace, 'Fira Code', Menlo, Consolas, monospace)",
 } as const;
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
