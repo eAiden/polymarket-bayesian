@@ -588,6 +588,7 @@ export function Dashboard({ initialData }: DashboardProps) {
                     <th scope="col">Edge</th>
                     <th scope="col">Kelly</th>
                     <th scope="col">Opened</th>
+                    <th scope="col">Resolves</th>
                     <th scope="col">Status</th>
                     <th scope="col">P&L</th>
                   </tr>
@@ -661,6 +662,9 @@ function TradeRow({ pos }: { pos: PaperPosition }) {
       <td style={{ color: "var(--muted)" }}>{(pos.kellyFraction * 100).toFixed(1)}%</td>
       <td style={{ color: "var(--muted)", fontSize: 11 }}>
         {shortDate(pos.entryTimestamp)}
+      </td>
+      <td style={{ color: "var(--muted)", fontSize: 11 }}>
+        {pos.resolutionDate ? shortDate(pos.resolutionDate) : "—"}
       </td>
       <td>
         {pos.status === "open" ? (

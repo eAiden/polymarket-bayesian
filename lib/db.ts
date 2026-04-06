@@ -640,7 +640,8 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
 
   // JOIN trades with markets to get market question + current price for mark-to-market
   const rows = await db`
-    SELECT t.*, m.question AS market_question, m.yes_prob_pct, m.resolved_outcome AS market_outcome
+    SELECT t.*, m.question AS market_question, m.yes_prob_pct,
+           m.resolved_outcome AS market_outcome, m.end_date_iso AS market_end_date_iso
     FROM trades t
     LEFT JOIN markets m ON m.id = t.market_id
     ORDER BY t.opened_at ASC
@@ -715,6 +716,7 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
       exitPrice: r.exit_prob != null ? (r.exit_prob as number) : undefined,
       exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
       exitReason: r.close_reason as "resolution" | "stop_loss" | "edge_decay" | "take_profit" | undefined,
+      resolutionDate: r.market_end_date_iso ? (r.market_end_date_iso as string) : undefined,
       pnl: pnlUsd,
       pnlPct,
       outcome: marketOutcome,

@@ -26,6 +26,7 @@ export interface PaperPosition {
   exitPrice?: number;
   exitTimestamp?: string;
   exitReason?: "resolution" | "stop_loss" | "edge_decay" | "take_profit";
+  resolutionDate?: string; // ISO string from markets.end_date_iso
   pnl?: number;
   pnlPct?: number;
   outcome?: 1 | 0;
