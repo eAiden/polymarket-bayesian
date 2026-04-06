@@ -172,6 +172,12 @@ export async function migrate(): Promise<void> {
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_outcome ON trade_features(outcome) WHERE outcome IS NOT NULL`;
   await db`CREATE INDEX IF NOT EXISTS idx_trade_features_pending_outcome ON trade_features(market_id) WHERE outcome IS NULL`;
 
+  // Add exit-snapshot columns to trade_features (idempotent — IF NOT EXISTS)
+  await db`ALTER TABLE trade_features ADD COLUMN IF NOT EXISTS features_at_close JSONB`;
+  await db`ALTER TABLE trade_features ADD COLUMN IF NOT EXISTS edge_at_close REAL`;
+  await db`ALTER TABLE trade_features ADD COLUMN IF NOT EXISTS market_prob_at_close REAL`;
+  await db`ALTER TABLE trade_features ADD COLUMN IF NOT EXISTS close_reason TEXT`;
+
   // One-time data migration: fix trades closed by model-driven exits before the
   // status='stopped' distinction was introduced. Safe to re-run — second pass finds 0 rows.
   await db`
@@ -596,13 +602,44 @@ export async function backfillTradeOutcomes(
   `;
 }
 
+// Called from pipeline.ts when a model-driven exit fires (edge_decay, stop_loss, take_profit).
+// Saves a second feature snapshot so training can compare entry vs exit conditions.
+// Resolution exits are intentionally excluded — the model made no decision there.
+export async function updateTradeExitSnapshot(
+  tradeId: number,
+  featuresAtClose: Record<string, unknown>,
+  edgeAtClose: number,
+  marketProbAtClose: number,
+  closeReason: string,
+): Promise<void> {
+  const db = sql();
+  await db`
+    UPDATE trade_features
+    SET features_at_close = ${JSON.stringify(featuresAtClose)}::jsonb,
+        edge_at_close      = ${edgeAtClose},
+        market_prob_at_close = ${marketProbAtClose},
+        close_reason       = ${closeReason}
+    WHERE trade_id = ${tradeId}
+  `;
+}
+
 // Returns all feature rows with a known outcome — used by model training.
-export async function getTrainableSnapshots(): Promise<
-  Array<{ features: Record<string, unknown>; outcome: 0 | 1; edgeAtOpen: number; direction: string }>
-> {
+// Includes exit snapshot (features_at_close etc.) when available — only model-driven exits
+// (edge_decay, stop_loss, take_profit) have these; resolution exits do not.
+export async function getTrainableSnapshots(): Promise<Array<{
+  features: Record<string, unknown>;
+  outcome: 0 | 1;
+  edgeAtOpen: number;
+  direction: string;
+  featuresAtClose?: Record<string, unknown>;
+  edgeAtClose?: number;
+  marketProbAtClose?: number;
+  closeReason?: string;
+}>> {
   const db = sql();
   const rows = await db`
-    SELECT features, outcome, edge_at_open, direction
+    SELECT features, outcome, edge_at_open, direction,
+           features_at_close, edge_at_close, market_prob_at_close, close_reason
     FROM trade_features
     WHERE outcome IS NOT NULL
     ORDER BY recorded_at ASC
@@ -612,6 +649,10 @@ export async function getTrainableSnapshots(): Promise<
     outcome: r.outcome as 0 | 1,
     edgeAtOpen: r.edge_at_open as number,
     direction: r.direction as string,
+    featuresAtClose: r.features_at_close != null ? (r.features_at_close as Record<string, unknown>) : undefined,
+    edgeAtClose: r.edge_at_close != null ? (r.edge_at_close as number) : undefined,
+    marketProbAtClose: r.market_prob_at_close != null ? (r.market_prob_at_close as number) : undefined,
+    closeReason: r.close_reason != null ? (r.close_reason as string) : undefined,
   }));
 }
 

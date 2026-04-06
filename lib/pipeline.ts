@@ -9,7 +9,7 @@ import {
   insertSignal, appendPriceHistory, batchAppendPriceHistory,
   touchMarketScan, batchTouchMarketScan,
   getMarketStore, openTrade, getOpenTrades, closeTrade,
-  updateMarketPrice, insertTradeFeatures,
+  updateMarketPrice, insertTradeFeatures, updateTradeExitSnapshot,
 } from "./db";
 import { signalsToLikelihoodRatio, bayesianUpdate, credibleInterval } from "./bayesian";
 import { fetchEnrichment, extractSignalsBatch } from "./signal-extraction";
@@ -105,6 +105,36 @@ async function saveTradeFeatures(
     await insertTradeFeatures(tradeId, marketId, features as unknown as Record<string, unknown>, edgePct, direction, yesProbPct);
   } catch (e) {
     console.warn(`[${logPrefix}] Failed to save trade features for trade #${tradeId}:`, e);
+  }
+}
+
+// Saves a second feature snapshot at exit time for model-driven stops.
+// Lets the training pipeline compare what changed between open and close.
+// Resolution exits are intentionally excluded — no model decision was made.
+async function saveExitSnapshot(
+  tradeId: number,
+  signal: ExtractedSignal,
+  yesProbPct: number,
+  enrichment: MarketEnrichment,
+  crossMatches: CrossMarketMatch[],
+  edgePct: number,
+  closeReason: string,
+  logPrefix: string,
+): Promise<void> {
+  try {
+    const features = computeFeatures(
+      signal, yesProbPct, enrichment,
+      crossMatches, enrichment.calibrationBias?.avgEdgeBias ?? 0,
+    );
+    await updateTradeExitSnapshot(
+      tradeId,
+      features as unknown as Record<string, unknown>,
+      edgePct,
+      yesProbPct,
+      closeReason,
+    );
+  } catch (e) {
+    console.warn(`[${logPrefix}] Failed to save exit snapshot for trade #${tradeId}:`, e);
   }
 }
 
@@ -236,6 +266,12 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
           await closeTrade(existingTrade.id, market.yesProbPct, pnl, exit.reason);
           openTradesByMarket.delete(market.id);
           console.log(`[pipeline] Exit (${exit.exitLabel}): closed trade #${existingTrade.id} on "${market.question.slice(0, 40)}" (P&L=$${pnl})`);
+          // Save exit snapshot for training — captures what the model saw when it lost conviction
+          await saveExitSnapshot(
+            existingTrade.id, result.signal, market.yesProbPct,
+            enrichmentMap.get(market.id) ?? {}, result.crossMatches,
+            edgePct, exit.reason, "pipeline",
+          );
           // Don't reopen on the same scan cycle that triggered the close
           continue;
         }
@@ -402,6 +438,12 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
       const pnl = computePnl(existingTrade, market.yesProbPct);
       await closeTrade(existingTrade.id, market.yesProbPct, pnl, exit.reason);
       console.log(`[reanalyze] Exit (${exit.exitLabel}): closed trade #${existingTrade.id} (P&L=$${pnl})`);
+      // Save exit snapshot for training
+      await saveExitSnapshot(
+        existingTrade.id, result.signal, market.yesProbPct,
+        enrichment, result.crossMatches,
+        edgePct, exit.reason, "reanalyze",
+      );
       return; // don't re-open on same cycle that triggered the close
     }
   }
