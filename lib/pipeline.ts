@@ -270,7 +270,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       const absEdge = Math.abs(edgePct);
       const confidence = edgeToConfidence(absEdge);
 
-      // Insert signal
+      // Insert signal (with credible interval)
       await insertSignal({
         marketId: market.id,
         priorProb: market.yesProbPct,
@@ -286,6 +286,8 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         topFact: result.topFact,
         sources: result.sources,
         triggerType: "full_scan",
+        ciLow: ci[0],
+        ciHigh: ci[1],
       });
 
       // Collect for batch flushes after the loop
@@ -353,7 +355,6 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         message: `Analyzed ${analyzed}/${filtered.length}`,
       });
 
-      void ci; // credible interval available but not stored in this schema version
     }
 
     // Flush batched writes (2 queries for price history, 1 for scan timestamps)
@@ -451,6 +452,7 @@ export async function reanalyzeMarket(
   const absEdge = Math.abs(edgePct);
   const confidence = edgeToConfidence(absEdge);
 
+  const ci = credibleInterval(posteriorProb, result.signal.newsSignals.length);
   await insertSignal({
     marketId,
     priorProb: market.yesProbPct,
@@ -466,6 +468,8 @@ export async function reanalyzeMarket(
     topFact: result.topFact,
     sources: result.sources,
     triggerType: "news_triggered",
+    ciLow: ci[0],
+    ciHigh: ci[1],
   });
 
   await appendPriceHistory(marketId, market.yesProbPct, posteriorProb);

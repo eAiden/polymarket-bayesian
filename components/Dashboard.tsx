@@ -11,7 +11,7 @@ type MainTab = "markets" | "trades";
 type TriggerFilter = "all" | "news_triggered";
 
 interface ModelStatus { trained: boolean; version: string; updatedAt: string }
-interface TrainStats { totalSnapshots: number; resolvedSnapshots: number; usableSnapshots: number; readyToTrain: boolean; samplesNeeded: number }
+interface TrainStats { totalSnapshots: number; resolvedSnapshots: number; usableSnapshots: number; readyToTrain: boolean; samplesNeeded: number; resolvingIn14Days: number }
 
 const CATEGORIES = ["All", "Saved", "Politics", "Crypto", "Sports", "Economics", "Science", "Other"];
 const POLL_INTERVAL = 5 * 60 * 1000;
@@ -249,7 +249,7 @@ export function Dashboard({ initialData }: DashboardProps) {
               <span className="train-progress">
                 {trainStats.readyToTrain
                   ? `${trainStats.usableSnapshots} resolved samples — ready to train`
-                  : `${trainStats.usableSnapshots}/20 resolved · ${trainStats.samplesNeeded} more needed`}
+                  : `${trainStats.usableSnapshots}/20 resolved${trainStats.resolvingIn14Days > 0 ? ` · ${trainStats.resolvingIn14Days} resolving in 14d` : ` · ${trainStats.samplesNeeded} more needed`}`}
               </span>
               <button
                 className="train-btn"

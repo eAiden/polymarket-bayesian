@@ -45,26 +45,65 @@ describe("signalsToLikelihoodRatio", () => {
     expect(signalsToLikelihoodRatio([sig("NO", "weak")])).toBeCloseTo(0.92);
   });
 
-  it("strong YES and strong NO partially cancel (1.4 × 0.6 = 0.84)", () => {
-    const ratio = signalsToLikelihoodRatio([sig("YES", "strong"), sig("NO", "strong")]);
-    expect(ratio).toBeCloseTo(0.84);
+  it("strong YES and strong NO from different sources partially cancel (1.4 × 0.6 = 0.84)", () => {
+    const signals: NewsSignal[] = [
+      { ...sig("YES", "strong"), source: "Reuters" },
+      { ...sig("NO", "strong"), source: "BBC" },
+    ];
+    expect(signalsToLikelihoodRatio(signals)).toBeCloseTo(0.84);
   });
 
-  it("compound YES signals are clamped at 4.0 upper bound", () => {
+  it("compound YES signals from different sources are clamped at 4.0 upper bound", () => {
     // 1.4^8 ≈ 14.8 → clamps to 4.0
-    const signals = Array(8).fill(sig("YES", "strong"));
+    const signals: NewsSignal[] = Array.from({ length: 8 }, (_, i) => ({
+      ...sig("YES", "strong"),
+      source: `source-${i}`,
+    }));
     expect(signalsToLikelihoodRatio(signals)).toBe(4.0);
   });
 
-  it("compound NO signals are clamped at 0.25 lower bound", () => {
+  it("compound NO signals from different sources are clamped at 0.25 lower bound", () => {
     // 0.6^8 ≈ 0.017 → clamps to 0.25
-    const signals = Array(8).fill(sig("NO", "strong"));
+    const signals: NewsSignal[] = Array.from({ length: 8 }, (_, i) => ({
+      ...sig("NO", "strong"),
+      source: `source-${i}`,
+    }));
     expect(signalsToLikelihoodRatio(signals)).toBe(0.25);
   });
 
-  it("two moderate YES signals compound correctly (1.2 × 1.2 = 1.44, within bounds)", () => {
-    const ratio = signalsToLikelihoodRatio([sig("YES", "moderate"), sig("YES", "moderate")]);
-    expect(ratio).toBeCloseTo(1.44);
+  it("two moderate YES from different sources compound correctly (1.2 × 1.2 = 1.44)", () => {
+    const signals: NewsSignal[] = [
+      { ...sig("YES", "moderate"), source: "Reuters" },
+      { ...sig("YES", "moderate"), source: "BBC" },
+    ];
+    expect(signalsToLikelihoodRatio(signals)).toBeCloseTo(1.44);
+  });
+
+  it("deduplicates signals from the same source — keeps only the strongest", () => {
+    // Three strong YES from the same source should count as one, not compound 3x
+    const sameSrc: NewsSignal[] = [
+      { ...sig("YES", "strong"), source: "Reuters" },
+      { ...sig("YES", "strong"), source: "Reuters" },
+      { ...sig("YES", "strong"), source: "Reuters" },
+    ];
+    expect(signalsToLikelihoodRatio(sameSrc)).toBeCloseTo(1.4); // as if only 1 signal
+  });
+
+  it("dedup keeps the strongest signal when mixed strengths from same source", () => {
+    const mixed: NewsSignal[] = [
+      { ...sig("YES", "weak"), source: "BBC" },
+      { ...sig("YES", "strong"), source: "BBC" },
+      { ...sig("YES", "moderate"), source: "BBC" },
+    ];
+    expect(signalsToLikelihoodRatio(mixed)).toBeCloseTo(1.4); // strong wins
+  });
+
+  it("signals from different sources still compound independently", () => {
+    const diff: NewsSignal[] = [
+      { ...sig("YES", "moderate"), source: "Reuters" },
+      { ...sig("YES", "moderate"), source: "BBC" },
+    ];
+    expect(signalsToLikelihoodRatio(diff)).toBeCloseTo(1.44); // 1.2 × 1.2
   });
 });
 

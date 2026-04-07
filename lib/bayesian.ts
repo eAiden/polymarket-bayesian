@@ -11,9 +11,20 @@ import type { NewsSignal } from "./types";
  * Clamps final ratio to [0.25, 4.0].
  */
 export function signalsToLikelihoodRatio(signals: NewsSignal[]): number {
-  let ratio = 1.0;
-
+  // Deduplicate by source: keep only the strongest signal per source.
+  // Without this, one article generating 3 "strong YES" signals compounds to
+  // LR ≈ 2.74 even though it's a single piece of information.
+  const strengthRank: Record<string, number> = { strong: 3, moderate: 2, weak: 1 };
+  const bySource = new Map<string, NewsSignal>();
   for (const s of signals) {
+    const existing = bySource.get(s.source);
+    if (!existing || strengthRank[s.strength] > strengthRank[existing.strength]) {
+      bySource.set(s.source, s);
+    }
+  }
+
+  let ratio = 1.0;
+  for (const s of bySource.values()) {
     let multiplier: number;
     if (s.direction === "YES") {
       multiplier = s.strength === "strong" ? 1.4 : s.strength === "moderate" ? 1.2 : 1.08;

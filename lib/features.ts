@@ -47,7 +47,12 @@ export function computeFeatures(
     buySellImbalance = t.buySellRatio > 0
       ? Math.max(-1, Math.min(1, (t.buySellRatio - 1) / 2)) // normalize around 1.0
       : 0;
-    volumeSpike = t.avgTradeSize > 0 ? t.totalTrades / 50 : 0; // rough proxy
+    // Recent notional volume proxy: totalTrades × avgTradeSize ≈ recent $-volume.
+    // Normalized so $2,000 of notional = 1.0; capped at 3.0.
+    // Previously was totalTrades / 50 which ignored trade size entirely.
+    volumeSpike = t.avgTradeSize > 0
+      ? Math.min(3, (t.totalTrades * t.avgTradeSize) / 2000)
+      : 0;
   }
 
   if (enrichment.orderBook) {

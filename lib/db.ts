@@ -121,6 +121,10 @@ export async function migrate(): Promise<void> {
     ALTER TABLE calibration ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT 'YES'
   `;
 
+  // Add credible interval columns to signals (idempotent)
+  await db`ALTER TABLE signals ADD COLUMN IF NOT EXISTS ci_low REAL`;
+  await db`ALTER TABLE signals ADD COLUMN IF NOT EXISTS ci_high REAL`;
+
   await db`
     CREATE TABLE IF NOT EXISTS news_alerts (
       id SERIAL PRIMARY KEY,
@@ -273,18 +277,21 @@ export async function insertSignal(s: {
   topFact: string;
   sources: string[];
   triggerType: string;
+  ciLow?: number;
+  ciHigh?: number;
 }): Promise<number> {
   const db = sql();
   const rows = await db`
     INSERT INTO signals (
       market_id, prior_prob, posterior_prob, likelihood_ratio, edge_pct,
       direction, confidence, reasoning, key_factors, news_signals,
-      news_age, top_fact, sources, trigger_type
+      news_age, top_fact, sources, trigger_type, ci_low, ci_high
     ) VALUES (
       ${s.marketId}, ${s.priorProb}, ${s.posteriorProb}, ${s.likelihoodRatio}, ${s.edgePct},
       ${s.direction}, ${s.confidence}, ${s.reasoning},
       ${JSON.stringify(s.keyFactors)}::jsonb, ${JSON.stringify(s.newsSignals)}::jsonb,
-      ${s.newsAge}, ${s.topFact ?? null}, ${s.sources}, ${s.triggerType}
+      ${s.newsAge}, ${s.topFact ?? null}, ${s.sources}, ${s.triggerType},
+      ${s.ciLow ?? null}, ${s.ciHigh ?? null}
     )
     RETURNING id
   `;
@@ -846,6 +853,50 @@ export async function getCalibrationSummary(): Promise<CalibrationSummary> {
     brierSkill: Math.round(brierSkill * 1000) / 1000,
     hitRate: Math.round(hitRate * 1000) / 1000,
     records,
+  };
+}
+
+// ─── Train readiness ─────────────────────────────────────────────────────────
+
+const TRAIN_THRESHOLD = 20;
+
+export interface TrainReadiness {
+  totalSnapshots: number;
+  resolvedSnapshots: number;
+  usableSnapshots: number;
+  readyToTrain: boolean;
+  samplesNeeded: number;
+  resolvingIn14Days: number;
+}
+
+export async function getTrainReadiness(): Promise<TrainReadiness> {
+  const db = sql();
+  const [snapshotRow, upcomingRow] = await Promise.all([
+    db`
+      SELECT
+        COUNT(*)                                         AS total,
+        COUNT(*) FILTER (WHERE outcome IS NOT NULL)     AS resolved
+      FROM trade_features
+    `,
+    db`
+      SELECT COUNT(*) AS count
+      FROM markets
+      WHERE end_date_iso IS NOT NULL
+        AND end_date_iso::timestamptz > NOW()
+        AND end_date_iso::timestamptz <= NOW() + INTERVAL '14 days'
+        AND resolved_outcome IS NULL
+    `,
+  ]);
+  const total = Number(snapshotRow[0].total);
+  const resolved = Number(snapshotRow[0].resolved);
+  const resolvingIn14Days = Number(upcomingRow[0].count);
+  return {
+    totalSnapshots: total,
+    resolvedSnapshots: resolved,
+    usableSnapshots: resolved,
+    readyToTrain: resolved >= TRAIN_THRESHOLD,
+    samplesNeeded: Math.max(0, TRAIN_THRESHOLD - resolved),
+    resolvingIn14Days,
   };
 }
 
