@@ -53,7 +53,7 @@ export async function POST(req: NextRequest) {
   runScanPipeline(send)
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error("[scan route] Pipeline error:", msg);
+      console.error("[scan route] Pipeline error:", err);
       send({ phase: "error", message: msg });
     })
     .finally(() => writer.close().catch(() => {}));

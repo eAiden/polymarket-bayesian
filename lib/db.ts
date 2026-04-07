@@ -405,17 +405,22 @@ export async function batchAppendPriceHistory(
   `;
   const latestByMarket = new Map(latestRows.map(r => [r.market_id as string, r.market_prob as number]));
 
-  // Keep only rows where the price changed
-  const toInsert = rows.filter(r => latestByMarket.get(r.marketId) !== r.marketProb);
+  // Keep only rows where the price changed, then coerce to consistent shape.
+  // Mixed object shapes (e.g. one batch has fairProb, another doesn't) cause
+  // postgres.js's `db(array)` helper to crash with "str.replace is not a function".
+  const toInsert = rows
+    .filter(r => latestByMarket.get(r.marketId) !== r.marketProb)
+    .map(r => ({
+      market_id: String(r.marketId),
+      market_prob: Number(r.marketProb),
+      fair_prob: r.fairProb == null || Number.isNaN(r.fairProb) ? null : Number(r.fairProb),
+    }))
+    .filter(r => Number.isFinite(r.market_prob));
   if (toInsert.length === 0) return;
 
   await db`
     INSERT INTO price_history (market_id, market_prob, fair_prob)
-    SELECT * FROM ${db(toInsert.map(r => ({
-      market_id: r.marketId,
-      market_prob: r.marketProb,
-      fair_prob: r.fairProb ?? null,
-    })))}
+    SELECT * FROM ${db(toInsert)}
   `;
 }
 
