@@ -218,7 +218,7 @@ describe("default weights", () => {
     ];
     for (const key of required) {
       expect(w).toHaveProperty(key);
-      expect(typeof (w as Record<string, unknown>)[key]).toBe("number");
+      expect(typeof (w as unknown as Record<string, unknown>)[key]).toBe("number");
     }
   });
 

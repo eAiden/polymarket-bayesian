@@ -458,6 +458,21 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       console.warn("[pipeline] Failed to persist scan_run:", e);
     }
 
+    // Alerting: ping webhook when a scan is degraded or has errors.
+    const webhook = process.env.ALERT_WEBHOOK_URL;
+    if (webhook && (degraded || scanErrors.length > 0 || signalCoverage < 0.5)) {
+      const content =
+        `⚠️ Polymarket scan ${degraded ? "DEGRADED" : "WARN"}\n` +
+        `scanned=${filtered.length} coverage=${(signalCoverage * 100).toFixed(0)}% ` +
+        `opened=${opened} closed=${closedByExit} resolved=${resolvedCount} ` +
+        `errors=${scanErrors.length} duration=${durationSec}s`;
+      fetch(webhook, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, text: content }),
+      }).catch((e) => console.warn("[pipeline] Alert webhook failed:", e));
+    }
+
     emit({ phase: "done", result });
     return result;
   } finally {

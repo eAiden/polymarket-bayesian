@@ -591,6 +591,40 @@ export function Dashboard({ initialData }: DashboardProps) {
                   <span className="trades-stat-value">{openPositions.length} / {closedPositions.length}</span>
                 </div>
               </div>
+              {/* Equity curve sparkline */}
+              {(() => {
+                const settled = allPositions
+                  .filter(p => (p.status === "closed" || p.status === "stopped") && p.exitTimestamp)
+                  .sort((a, b) => new Date(a.exitTimestamp!).getTime() - new Date(b.exitTimestamp!).getTime());
+                if (settled.length < 2) return null;
+                let running = pt!.bankroll;
+                const points: number[] = [running];
+                for (const p of settled) { running += (p.pnl ?? 0); points.push(running); }
+                const minV = Math.min(...points);
+                const maxV = Math.max(...points);
+                const range = Math.max(1, maxV - minV);
+                const W = 480, H = 60, PAD = 4;
+                const coords = points.map((v, i) => {
+                  const x = PAD + (i / (points.length - 1)) * (W - PAD * 2);
+                  const y = H - PAD - ((v - minV) / range) * (H - PAD * 2);
+                  return `${x.toFixed(1)},${y.toFixed(1)}`;
+                }).join(" ");
+                const baselineY = H - PAD - ((pt!.bankroll - minV) / range) * (H - PAD * 2);
+                const last = points[points.length - 1];
+                const stroke = last >= pt!.bankroll ? "var(--green)" : "var(--red)";
+                return (
+                  <div style={{ marginTop: 12, padding: "8px 12px", background: "var(--bg-alt, #0d0d10)", borderRadius: 6 }}>
+                    <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 4, display: "flex", justifyContent: "space-between" }}>
+                      <span>Equity curve ({settled.length} settled trades)</span>
+                      <span>${points[0].toFixed(0)} → ${last.toFixed(0)}</span>
+                    </div>
+                    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: "block" }}>
+                      <line x1={PAD} y1={baselineY} x2={W - PAD} y2={baselineY} stroke="var(--muted)" strokeDasharray="2 3" strokeWidth={1} opacity={0.5} />
+                      <polyline fill="none" stroke={stroke} strokeWidth={1.5} points={coords} />
+                    </svg>
+                  </div>
+                );
+              })()}
             </div>
           )}
 

@@ -84,8 +84,8 @@ describe("golden trace: signals → trade decision", () => {
 
   it("weak conflicting signals on a 50% market produce no actionable trade", () => {
     const signals: NewsSignal[] = [
-      { fact: "Mild positive",  direction: "YES", strength: "weak", recency: "this week", source: "Reuters" },
-      { fact: "Mild negative",  direction: "NO",  strength: "weak", recency: "this week", source: "BBC"     },
+      { fact: "Mild positive",  direction: "YES", strength: "weak", recency: "this_week", source: "Reuters" },
+      { fact: "Mild negative",  direction: "NO",  strength: "weak", recency: "this_week", source: "BBC"     },
     ];
     const lr = signalsToLikelihoodRatio(signals);
     expect(lr).toBeCloseTo(1.08 * 0.92, 3);

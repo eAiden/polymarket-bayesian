@@ -15,7 +15,7 @@ function makeSignal(overrides: Partial<ExtractedSignal> = {}): ExtractedSignal {
     crossMarketDisagreement: 0,
     newsAge: "recent",
     informationCompleteness: "medium",
-    domainSignals: { keyMetric: "", trendDirection: "neutral", volatilityAssessment: "low" },
+    domainSignals: { keyMetric: "", trendDirection: "flat", volatilityAssessment: "low" },
     ...overrides,
   };
 }
@@ -180,7 +180,7 @@ describe("volumeSpike cap", () => {
 describe("liquidityRatio", () => {
   it("is clamped to minimum 0.1", () => {
     const enrichment = makeEnrichment({
-      orderBook: { bidDepth: 0, askDepth: 1000, spread: 2, midpoint: 50 },
+      orderBook: { bids: [], asks: [], totalLiquidity: 1000, bidDepth: 0, askDepth: 1000, spread: 2, midPrice: 50 },
     });
     const fv = computeFeatures(makeSignal(), 50, enrichment, noCrossMatches, 0);
     expect(fv.liquidityRatio).toBeGreaterThanOrEqual(0.1);
@@ -188,7 +188,7 @@ describe("liquidityRatio", () => {
 
   it("is clamped to maximum 10", () => {
     const enrichment = makeEnrichment({
-      orderBook: { bidDepth: 100000, askDepth: 1, spread: 2, midpoint: 50 },
+      orderBook: { bids: [], asks: [], totalLiquidity: 100001, bidDepth: 100000, askDepth: 1, spread: 2, midPrice: 50 },
     });
     const fv = computeFeatures(makeSignal(), 50, enrichment, noCrossMatches, 0);
     expect(fv.liquidityRatio).toBeLessThanOrEqual(10);
@@ -232,8 +232,8 @@ describe("cross-market features", () => {
 
   it("crossMarketSpread = max - min across all prices", () => {
     const cross: CrossMarketMatch[] = [
-      { marketId: "x", question: "q", probability: 40, similarity: 0.8, platform: "kalshi" },
-      { marketId: "y", question: "q", probability: 70, similarity: 0.9, platform: "metaculus" },
+      { title: "q", url: "", probability: 40, similarity: 0.8, platform: "Manifold" },
+      { title: "q", url: "", probability: 70, similarity: 0.9, platform: "Metaculus" },
     ];
     const fv = computeFeatures(makeSignal(), 55, makeEnrichment(), cross, 0);
     // prices: [55, 40, 70] → spread = 70 - 40 = 30
@@ -276,7 +276,7 @@ describe("completeness", () => {
     for (const field of required) {
       expect(fv).toHaveProperty(field);
       if (field !== "timestamp") {
-        expect(typeof (fv as Record<string, unknown>)[field]).toBe("number");
+        expect(typeof (fv as unknown as Record<string, unknown>)[field]).toBe("number");
       }
     }
   });

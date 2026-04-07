@@ -10,7 +10,7 @@ const MAX_YES_PCT = 90;
 const MAX_DAYS = 45;
 const MIN_VOLUME = 10_000;
 
-function inferCategory(question: string): string {
+export function inferCategory(question: string): string {
   const q = question.toLowerCase();
   if (/\bbtc\b|bitcoin|\beth\b|ether(eum)?|\bcrypto|solana|\bsol\b|\bxrp\b|doge|defi|\bnft\b|blockchain|coinbase|binance|stablecoin|altcoin/.test(q)) return "Crypto";
   if (/elect|president|senate|congress|democrat|republican|trump|biden|harris|vance|nato|parliament|geopolit|prime minister|chancellor|\bpm\b|cabinet|impeach|coup|referendum|primary|gubernatorial|iran|israel|ukrain|russia|putin|zelensky|netanyahu|gaza|hamas|hezbollah|ceasefire|invasion|sanction|war\b|conflict|treaty|summit|tariff|deport|immigration/.test(q)) return "Politics";
