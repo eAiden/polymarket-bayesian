@@ -18,7 +18,7 @@ const mono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: "Polymarket Signal",
-  description: "Bayesian edge analysis for Polymarket prediction markets resolving within 90 days.",
+  description: "Bayesian edge analysis for Polymarket prediction markets resolving within 45 days.",
   openGraph: {
     title: "Polymarket Signal",
     description: "Bayesian edge analysis for Polymarket prediction markets.",
