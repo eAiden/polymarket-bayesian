@@ -644,9 +644,9 @@ function TradeRow({ pos }: { pos: PaperPosition }) {
       <td>{pos.entryPrice}%{pos.exitPrice != null && <span style={{ color: "var(--muted)", fontSize: 10 }}> → {pos.exitPrice}%</span>}</td>
       <td style={{
         color: pos.currentPrice == null ? "var(--muted)"
-          : pos.side === "YES"
-            ? (pos.currentPrice > pos.entryPrice ? "var(--green)" : pos.currentPrice < pos.entryPrice ? "var(--red)" : "var(--muted)")
-            : (pos.currentPrice < pos.entryPrice ? "var(--green)" : pos.currentPrice > pos.entryPrice ? "var(--red)" : "var(--muted)"),
+          : pos.currentPrice > pos.entryPrice ? "var(--green)"
+          : pos.currentPrice < pos.entryPrice ? "var(--red)"
+          : "var(--muted)",
       }}>
         {pos.currentPrice != null ? `${pos.currentPrice}%` : "—"}
       </td>

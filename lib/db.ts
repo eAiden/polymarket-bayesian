@@ -720,14 +720,17 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
 
     // Mark-to-market unrealized P&L for open positions
     // Uses current yes_prob_pct from the markets JOIN
-    const currentPrice = r.yes_prob_pct != null ? (r.yes_prob_pct as number) : undefined;
+    const yesProb = r.yes_prob_pct != null ? (r.yes_prob_pct as number) : undefined;
+    // Display price: always in terms of the side taken (NO trade shows the NO share price)
+    const currentPrice = yesProb != null
+      ? (direction === "YES" ? yesProb : 100 - yesProb)
+      : undefined;
     let unrealizedPnl: number | undefined;
-    if (r.status === "open" && currentPrice != null) {
-      const currentProb = currentPrice;
+    if (r.status === "open" && yesProb != null) {
       // Entry share price: YES side pays entryProb cents per share, NO side pays (100-entryProb) cents
       const entrySharePrice = direction === "YES" ? entryProb : 100 - entryProb;
-      // Current share price: YES share worth currentProb, NO share worth (100-currentProb)
-      const currentSharePrice = direction === "YES" ? currentProb : 100 - currentProb;
+      // Current share price: YES share worth yesProb, NO share worth (100-yesProb)
+      const currentSharePrice = direction === "YES" ? yesProb : 100 - yesProb;
       if (entrySharePrice > 0) {
         unrealizedPnl = Math.round(sizeUsd * (currentSharePrice - entrySharePrice) / entrySharePrice * 100) / 100;
       }
@@ -748,13 +751,15 @@ export async function getPaperTradingState(): Promise<PaperTradingState> {
       marketId: r.market_id as string,
       marketQuestion: (r.market_question as string | null) ?? "",
       side: direction,
-      entryPrice: entryProb,
+      entryPrice: direction === "YES" ? entryProb : 100 - entryProb,
       entryTimestamp: (r.opened_at as Date).toISOString(),
       edgeAtEntry,
       kellyFraction,
       notionalSize: sizeUsd,
       status: r.status as "open" | "closed" | "stopped",
-      exitPrice: r.exit_prob != null ? (r.exit_prob as number) : undefined,
+      exitPrice: r.exit_prob != null
+        ? (direction === "YES" ? (r.exit_prob as number) : 100 - (r.exit_prob as number))
+        : undefined,
       exitTimestamp: r.closed_at ? (r.closed_at as Date).toISOString() : undefined,
       exitReason: r.close_reason as "resolution" | "stop_loss" | "edge_decay" | "take_profit" | undefined,
       resolutionDate: r.market_end_date_iso ? (r.market_end_date_iso as string) : undefined,
