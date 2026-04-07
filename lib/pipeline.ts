@@ -10,11 +10,13 @@ import {
   touchMarketScan, batchTouchMarketScan,
   getMarketStore, openTrade, getOpenTrades, closeTrade,
   updateMarketPrice, insertTradeFeatures, updateTradeExitSnapshot,
+  getCalibrationSummary,
 } from "./db";
 import { signalsToLikelihoodRatio, bayesianUpdate, credibleInterval } from "./bayesian";
 import { fetchEnrichment, extractSignalsBatch } from "./signal-extraction";
 import { computeFeatures } from "./features";
 import { processResolvedMarkets } from "./resolution";
+import { computeCategoryBias } from "./calibration";
 import type { MarketEnrichment, ExtractedSignal } from "./types";
 import type { CrossMarketMatch } from "./crossmarket";
 import {
@@ -138,6 +140,29 @@ async function saveExitSnapshot(
   }
 }
 
+// ─── Calibration bias map ─────────────────────────────────────────────────────
+
+const MARKET_CATEGORIES = ["Crypto", "Politics", "Sports", "Economics", "Science", "Other"] as const;
+
+/**
+ * Build a per-category calibration bias map from historical resolved markets.
+ * Only categories with 3+ resolved records produce an entry.
+ * Returns an empty map early in the system's life — no effect until enough data accumulates.
+ */
+async function buildCategoryBiasMap(): Promise<Map<string, MarketEnrichment["calibrationBias"]>> {
+  try {
+    const summary = await getCalibrationSummary();
+    const map = new Map<string, MarketEnrichment["calibrationBias"]>();
+    for (const cat of MARKET_CATEGORIES) {
+      const bias = computeCategoryBias(summary.records, cat);
+      if (bias) map.set(cat, bias);
+    }
+    return map;
+  } catch {
+    return new Map(); // non-critical — return empty map on failure
+  }
+}
+
 export async function runScanPipeline(onProgress?: ScanProgressCallback): Promise<{
   marketsScanned: number;
   analyzed: number;
@@ -192,6 +217,10 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
     emit({ phase: "analyzing", current: 0, total: filtered.length, message: "Fetching enrichment data..." });
 
+    // 4b. Build per-category calibration bias map so the edge estimate can be debiased.
+    // Only categories with 3+ resolved markets will have an entry (computeCategoryBias returns null otherwise).
+    const categoryBiasMap = await buildCategoryBiasMap();
+
     // 5. Fetch enrichment per market (orderbook, FRED, crypto) concurrently
     const enrichmentMap = new Map<string, MarketEnrichment>();
     const ENRICHMENT_CONCURRENCY = 5;
@@ -199,7 +228,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       const batch = filtered.slice(i, i + ENRICHMENT_CONCURRENCY);
       await Promise.all(batch.map(async m => {
         const history = existingHistoryMap.get(m.id);
-        const enrichment = await fetchEnrichment(m, history);
+        const enrichment = await fetchEnrichment(m, history, categoryBiasMap);
         enrichmentMap.set(m.id, enrichment);
       }));
     }
@@ -228,7 +257,13 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
       // Compute Bayesian posterior
       const lr = signalsToLikelihoodRatio(result.signal.newsSignals);
       const posteriorProb = bayesianUpdate(market.yesProbPct, lr);
-      const edgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
+      const rawEdgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
+      // Subtract historical category bias so the live edge estimate is calibration-corrected.
+      // avgEdgeBias > 0 means the model historically over-estimates YES → shrink the edge.
+      const categoryBias = enrichmentMap.get(market.id)?.calibrationBias?.avgEdgeBias ?? 0;
+      const edgePct = categoryBias !== 0
+        ? Math.round((rawEdgePct - categoryBias) * 10) / 10
+        : rawEdgePct;
       const ci = credibleInterval(posteriorProb, result.signal.newsSignals.length);
 
       const direction = edgePct >= 0 ? "YES" : "NO";
@@ -377,7 +412,10 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
 // ─── Fast re-analysis for news-triggered updates ──────────────────────────────
 
-export async function reanalyzeMarket(marketId: string): Promise<void> {
+export async function reanalyzeMarket(
+  marketId: string,
+  categoryBiasMap?: Map<string, MarketEnrichment["calibrationBias"]>,
+): Promise<void> {
   const store = await getMarketStore();
   const tracked = store.markets.find(m => m.id === marketId);
   if (!tracked || tracked.resolved) return;
@@ -396,7 +434,7 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
     daysUntilResolution: tracked.daysUntilResolution,
   };
 
-  const enrichment = await fetchEnrichment(market, tracked.history);
+  const enrichment = await fetchEnrichment(market, tracked.history, categoryBiasMap);
   const errors: ScanError[] = [];
   const batchResults = await extractSignalsBatch([market], new Map([[market.id, enrichment]]), errors);
   const result = batchResults.get(marketId);
@@ -404,7 +442,11 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
 
   const lr = signalsToLikelihoodRatio(result.signal.newsSignals);
   const posteriorProb = bayesianUpdate(market.yesProbPct, lr);
-  const edgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
+  const rawEdgePct = Math.round((posteriorProb - market.yesProbPct) * 10) / 10;
+  const categoryBias = enrichment.calibrationBias?.avgEdgeBias ?? 0;
+  const edgePct = categoryBias !== 0
+    ? Math.round((rawEdgePct - categoryBias) * 10) / 10
+    : rawEdgePct;
   const direction = edgePct >= 0 ? "YES" : "NO";
   const absEdge = Math.abs(edgePct);
   const confidence = edgeToConfidence(absEdge);
@@ -475,10 +517,12 @@ export async function reanalyzeMarket(marketId: string): Promise<void> {
 
 // Keep old name for news-monitor compat
 export async function runFastReanalysis(marketIds: string[]): Promise<{ marketsReanalyzed: number }> {
+  // Build bias map once — reused across all markets in this batch
+  const categoryBiasMap = await buildCategoryBiasMap();
   let marketsReanalyzed = 0;
   for (const id of marketIds) {
     try {
-      await reanalyzeMarket(id);
+      await reanalyzeMarket(id, categoryBiasMap);
       marketsReanalyzed++;
     } catch (err) {
       console.error(`[fast-reanalysis] Error for market ${id}:`, err);

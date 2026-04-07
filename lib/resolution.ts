@@ -81,9 +81,10 @@ export async function processResolvedMarkets(): Promise<{ resolved: number; erro
       const openTrades = await getOpenTrades();
       const marketTrades = openTrades.filter(t => t.marketId === market.id);
       for (const trade of marketTrades) {
-        const exitProb = price;
-        // P&L: if direction matches outcome, calculate profit
+        // Store 100 or 0 — not the live mid-quote — so exit_prob is consistent with pnl_usd
+        // (which already assumes the share settles at 100 or 0 on resolution)
         const won = (trade.direction === "YES" && outcome === 1) || (trade.direction === "NO" && outcome === 0);
+        const exitProb = outcome === 1 ? 100 : 0;
         const exitSharePrice = won ? 100 : 0;
         const entrySharePrice = trade.direction === "YES" ? trade.entryProb : 100 - trade.entryProb;
         const pnl = entrySharePrice > 0
