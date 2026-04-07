@@ -142,7 +142,7 @@ async function saveExitSnapshot(
 
 // ─── Calibration bias map ─────────────────────────────────────────────────────
 
-const MARKET_CATEGORIES = ["Crypto", "Politics", "Sports", "Economics", "Science", "Other"] as const;
+const MARKET_CATEGORIES = ["Crypto", "Politics", "Sports", "Economics", "Science", "Entertainment", "Other"] as const;
 
 /**
  * Build a per-category calibration bias map from historical resolved markets.

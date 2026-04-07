@@ -405,22 +405,33 @@ export async function batchAppendPriceHistory(
   `;
   const latestByMarket = new Map(latestRows.map(r => [r.market_id as string, r.market_prob as number]));
 
-  // Keep only rows where the price changed, then coerce to consistent shape.
-  // Mixed object shapes (e.g. one batch has fairProb, another doesn't) cause
-  // postgres.js's `db(array)` helper to crash with "str.replace is not a function".
-  const toInsert = rows
-    .filter(r => latestByMarket.get(r.marketId) !== r.marketProb)
-    .map(r => ({
-      market_id: String(r.marketId),
-      market_prob: Number(r.marketProb),
-      fair_prob: r.fairProb == null || Number.isNaN(r.fairProb) ? null : Number(r.fairProb),
-    }))
-    .filter(r => Number.isFinite(r.market_prob));
-  if (toInsert.length === 0) return;
+  // Keep only rows where the price changed.
+  const filtered = rows.filter(r => latestByMarket.get(r.marketId) !== r.marketProb);
+  if (filtered.length === 0) return;
+
+  // Use parallel arrays + UNNEST instead of postgres.js's `db(array)` helper —
+  // the helper crashes with "str.replace is not a function" when row shapes
+  // are inconsistent or when any value is unexpectedly typed.
+  const ids: string[] = [];
+  const probs: number[] = [];
+  const fairs: (number | null)[] = [];
+  for (const r of filtered) {
+    const mp = Number(r.marketProb);
+    if (!Number.isFinite(mp)) continue;
+    ids.push(String(r.marketId));
+    probs.push(mp);
+    const fp = r.fairProb;
+    fairs.push(fp == null || Number.isNaN(fp) ? null : Number(fp));
+  }
+  if (ids.length === 0) return;
 
   await db`
     INSERT INTO price_history (market_id, market_prob, fair_prob)
-    SELECT * FROM ${db(toInsert)}
+    SELECT * FROM UNNEST(
+      ${ids}::text[],
+      ${probs}::real[],
+      ${fairs}::real[]
+    )
   `;
 }
 
