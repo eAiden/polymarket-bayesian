@@ -50,13 +50,22 @@ export async function POST(req: NextRequest) {
     writer.write(encoder.encode(data)).catch(() => {});
   };
 
+  // Heartbeat: SSE comment every 15s so browsers/proxies don't time out the
+  // connection during long Claude batches (which can stall progress for 1–2 min).
+  const heartbeat = setInterval(() => {
+    writer.write(encoder.encode(": ping\n\n")).catch(() => {});
+  }, 15_000);
+
   runScanPipeline(send)
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("[scan route] Pipeline error:", err);
       send({ phase: "error", message: msg });
     })
-    .finally(() => writer.close().catch(() => {}));
+    .finally(() => {
+      clearInterval(heartbeat);
+      writer.close().catch(() => {});
+    });
 
   return new Response(stream.readable, {
     headers: {
