@@ -12,6 +12,17 @@ type TriggerFilter = "all" | "news_triggered";
 
 interface ModelStatus { trained: boolean; version: string; updatedAt: string }
 interface TrainStats { totalSnapshots: number; resolvedSnapshots: number; usableSnapshots: number; readyToTrain: boolean; samplesNeeded: number; resolvingIn14Days: number }
+interface ScanRun {
+  finishedAt: string;
+  durationSec: number;
+  scanned: number;
+  signalCoverage: number;
+  opened: number;
+  closedByExit: number;
+  resolved: number;
+  errors: number;
+  degraded: boolean;
+}
 
 const CATEGORIES = ["All", "Saved", "Politics", "Crypto", "Sports", "Economics", "Science", "Other"];
 const POLL_INTERVAL = 5 * 60 * 1000;
@@ -55,6 +66,7 @@ export function Dashboard({ initialData }: DashboardProps) {
   const [newsAlertCount, setNewsAlertCount] = useState<number>(0);
   const [modelStatus, setModelStatus] = useState<ModelStatus | null>(null);
   const [trainStats, setTrainStats] = useState<TrainStats | null>(null);
+  const [scanRuns, setScanRuns] = useState<ScanRun[]>([]);
   const [training, setTraining] = useState(false);
   const [trainResult, setTrainResult] = useState<string | null>(null);
 
@@ -64,6 +76,9 @@ export function Dashboard({ initialData }: DashboardProps) {
       if (d?.total != null) setNewsAlertCount(d.total);
     }).catch(() => {});
     fetch("/api/train").then(r => r.ok ? r.json() : null).then(setTrainStats).catch(() => {});
+    fetch("/api/scan-runs").then(r => r.ok ? r.json() : null).then(d => {
+      if (d?.runs) setScanRuns(d.runs as ScanRun[]);
+    }).catch(() => {});
   }, []);
 
   const handleRetrain = async () => {
@@ -237,7 +252,7 @@ export function Dashboard({ initialData }: DashboardProps) {
         <div>
           <h1 className="site-title">Polymarket Signal</h1>
           <p className="site-sub">
-            Markets 10–90% · ≤90 days · Signal extraction + scoring · Paper trading
+            Markets 10–90% · ≤45 days · Signal extraction + scoring · Paper trading
             {modelStatus && (
               <span className={`model-badge ${modelStatus.trained ? "model-trained" : "model-untrained"}`}>
                 {modelStatus.trained ? `Model ${modelStatus.version}` : "⚠ default weights"}
@@ -262,6 +277,25 @@ export function Dashboard({ initialData }: DashboardProps) {
               {trainResult && (
                 <span className={`train-result ${trainResult.startsWith("✓") ? "train-ok" : "train-err"}`}>
                   {trainResult}
+                </span>
+              )}
+            </div>
+          )}
+          {scanRuns.length > 0 && (
+            <div className="train-panel" style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, fontFamily: "monospace" }}>
+              <span>scans:</span>
+              {scanRuns.slice(0, 7).map((r, i) => {
+                const bad = r.degraded || r.errors > 0 || r.signalCoverage < 0.5;
+                const tip = `${new Date(r.finishedAt).toLocaleString()} · scanned=${r.scanned} coverage=${(r.signalCoverage * 100).toFixed(0)}% opened=${r.opened} closed=${r.closedByExit} resolved=${r.resolved} errors=${r.errors} ${r.durationSec}s${r.degraded ? " DEGRADED" : ""}`;
+                return (
+                  <span key={i} title={tip} style={{ color: bad ? "#e57373" : "#81c784", marginLeft: 4 }}>
+                    {bad ? "✗" : "✓"}
+                  </span>
+                );
+              })}
+              {scanRuns[0] && (
+                <span style={{ marginLeft: 8 }}>
+                  last: {scanRuns[0].scanned}m · {scanRuns[0].opened}op · {scanRuns[0].closedByExit}cl · {scanRuns[0].durationSec}s
                 </span>
               )}
             </div>

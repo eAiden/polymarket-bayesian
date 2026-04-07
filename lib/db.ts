@@ -138,6 +138,27 @@ export async function migrate(): Promise<void> {
   `;
 
   await db`
+    CREATE TABLE IF NOT EXISTS scan_runs (
+      id SERIAL PRIMARY KEY,
+      started_at TIMESTAMPTZ NOT NULL,
+      finished_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      duration_sec INTEGER NOT NULL,
+      scanned INTEGER NOT NULL,
+      signal_coverage REAL NOT NULL,
+      opened INTEGER NOT NULL,
+      closed_by_exit INTEGER NOT NULL,
+      resolved INTEGER NOT NULL,
+      skipped_low_edge INTEGER NOT NULL DEFAULT 0,
+      skipped_low_conf INTEGER NOT NULL DEFAULT 0,
+      skipped_already_open INTEGER NOT NULL DEFAULT 0,
+      open_total INTEGER NOT NULL,
+      errors INTEGER NOT NULL,
+      degraded BOOLEAN NOT NULL DEFAULT FALSE
+    )
+  `;
+  await db`CREATE INDEX IF NOT EXISTS idx_scan_runs_finished ON scan_runs(finished_at DESC)`;
+
+  await db`
     CREATE TABLE IF NOT EXISTS news_cache (
       cache_key TEXT PRIMARY KEY,
       data JSONB NOT NULL,
@@ -660,6 +681,61 @@ export async function getTrainableSnapshots(): Promise<Array<{
     edgeAtClose: r.edge_at_close != null ? (r.edge_at_close as number) : undefined,
     marketProbAtClose: r.market_prob_at_close != null ? (r.market_prob_at_close as number) : undefined,
     closeReason: r.close_reason != null ? (r.close_reason as string) : undefined,
+  }));
+}
+
+// ─── Scan runs (health/observability) ────────────────────────────────────────
+
+export interface ScanRunSummary {
+  startedAt: Date;
+  durationSec: number;
+  scanned: number;
+  signalCoverage: number;
+  opened: number;
+  closedByExit: number;
+  resolved: number;
+  skippedLowEdge: number;
+  skippedLowConf: number;
+  skippedAlreadyOpen: number;
+  openTotal: number;
+  errors: number;
+  degraded: boolean;
+}
+
+export async function insertScanRun(s: ScanRunSummary): Promise<void> {
+  const db = sql();
+  await db`
+    INSERT INTO scan_runs
+      (started_at, duration_sec, scanned, signal_coverage, opened, closed_by_exit, resolved,
+       skipped_low_edge, skipped_low_conf, skipped_already_open, open_total, errors, degraded)
+    VALUES
+      (${s.startedAt.toISOString()}, ${s.durationSec}, ${s.scanned}, ${s.signalCoverage},
+       ${s.opened}, ${s.closedByExit}, ${s.resolved},
+       ${s.skippedLowEdge}, ${s.skippedLowConf}, ${s.skippedAlreadyOpen},
+       ${s.openTotal}, ${s.errors}, ${s.degraded})
+  `;
+}
+
+export async function getRecentScanRuns(limit = 10): Promise<Array<ScanRunSummary & { finishedAt: string }>> {
+  const db = sql();
+  const rows = await db`
+    SELECT * FROM scan_runs ORDER BY finished_at DESC LIMIT ${limit}
+  `;
+  return rows.map(r => ({
+    startedAt: r.started_at as Date,
+    finishedAt: (r.finished_at as Date).toISOString(),
+    durationSec: r.duration_sec as number,
+    scanned: r.scanned as number,
+    signalCoverage: r.signal_coverage as number,
+    opened: r.opened as number,
+    closedByExit: r.closed_by_exit as number,
+    resolved: r.resolved as number,
+    skippedLowEdge: r.skipped_low_edge as number,
+    skippedLowConf: r.skipped_low_conf as number,
+    skippedAlreadyOpen: r.skipped_already_open as number,
+    openTotal: r.open_total as number,
+    errors: r.errors as number,
+    degraded: r.degraded as boolean,
   }));
 }
 

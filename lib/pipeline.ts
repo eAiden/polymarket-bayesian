@@ -10,7 +10,7 @@ import {
   touchMarketScan, batchTouchMarketScan,
   getMarketStore, openTrade, getOpenTrades, closeTrade,
   updateMarketPrice, insertTradeFeatures, updateTradeExitSnapshot,
-  getCalibrationSummary,
+  getCalibrationSummary, insertScanRun,
 } from "./db";
 import { signalsToLikelihoodRatio, bayesianUpdate, credibleInterval } from "./bayesian";
 import { fetchEnrichment, extractSignalsBatch } from "./signal-extraction";
@@ -183,6 +183,9 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
   let opened = 0;
   let closedByExit = 0;
   let resolvedCount = 0;
+  let skippedLowEdge = 0;
+  let skippedLowConf = 0;
+  let skippedAlreadyOpen = 0;
 
   try {
     const scanErrors: ScanError[] = [];
@@ -322,7 +325,17 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         }
       }
 
-      // Paper trading: open position if edge is actionable and none open
+      // Paper trading: open position if edge is actionable and none open.
+      // Track skip reasons so we can later tune thresholds from the [skip] log history.
+      if (absEdge < EDGE_OPEN_THRESHOLD_PP) {
+        skippedLowEdge++;
+        console.log(`[skip] market=${market.id} reason=low_edge edge=${edgePct > 0 ? "+" : ""}${edgePct}pp`);
+      } else if (confidence === "low") {
+        skippedLowConf++;
+        console.log(`[skip] market=${market.id} reason=low_conf edge=${edgePct > 0 ? "+" : ""}${edgePct}pp conf=low`);
+      } else if (openTradesByMarket.has(market.id)) {
+        skippedAlreadyOpen++;
+      }
       if (absEdge >= EDGE_OPEN_THRESHOLD_PP && confidence !== "low") {
         if (!openTradesByMarket.has(market.id)) {
           const { notional } = kellySize(edgePct, confidence, market.yesProbPct, 10_000);
@@ -415,7 +428,35 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
 
     const durationSec = Math.round((Date.now() - scanStartedAt) / 1000);
     const finalOpenCount = (await getOpenTrades()).length;
-    console.log(`[scan-summary] scanned=${filtered.length} opened=${opened} closed_by_exit=${closedByExit} resolved=${resolvedCount} open_total=${finalOpenCount} errors=${scanErrors.length} duration=${durationSec}s`);
+    // Degraded if Claude returned signals for fewer than half the markets we scanned —
+    // strong indicator of rate limit, prompt drift, or API outage.
+    const signalCoverage = filtered.length > 0 ? signalResults.size / filtered.length : 1;
+    const degraded = filtered.length > 0 && signalCoverage < 0.5;
+    console.log(
+      `[scan-summary]${degraded ? " DEGRADED" : ""} scanned=${filtered.length} coverage=${(signalCoverage * 100).toFixed(0)}% ` +
+      `opened=${opened} closed_by_exit=${closedByExit} resolved=${resolvedCount} ` +
+      `skipped_low_edge=${skippedLowEdge} skipped_low_conf=${skippedLowConf} skipped_already_open=${skippedAlreadyOpen} ` +
+      `open_total=${finalOpenCount} errors=${scanErrors.length} duration=${durationSec}s`
+    );
+    try {
+      await insertScanRun({
+        startedAt: new Date(scanStartedAt),
+        durationSec,
+        scanned: filtered.length,
+        signalCoverage,
+        opened,
+        closedByExit,
+        resolved: resolvedCount,
+        skippedLowEdge,
+        skippedLowConf,
+        skippedAlreadyOpen,
+        openTotal: finalOpenCount,
+        errors: scanErrors.length,
+        degraded,
+      });
+    } catch (e) {
+      console.warn("[pipeline] Failed to persist scan_run:", e);
+    }
 
     emit({ phase: "done", result });
     return result;
