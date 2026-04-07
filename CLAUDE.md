@@ -42,7 +42,7 @@ The pipeline is orchestrated by `lib/pipeline.ts::runScanPipeline()`, which acqu
 
 `instrumentation.ts` runs on Next.js server startup via the `register()` hook:
 1. Creates all DB tables/indexes (idempotent)
-2. Schedules daily full scan at 08:00 UTC and news monitor every 5 minutes via `setInterval`
+2. Schedules daily full scan at 00:00 UTC (08:00 Asia/Manila) and news monitor every 5 minutes via `setInterval`
 
 There is no separate server process — scheduling is embedded in the Next.js server.
 

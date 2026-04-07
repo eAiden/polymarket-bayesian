@@ -1,6 +1,6 @@
 // Next.js instrumentation hook — runs once on server startup.
 // Runs DB migration, then schedules:
-//   1. Daily full scan at 08:00 (checked every minute via setInterval)
+//   1. Daily full scan at 00:00 UTC (= 08:00 Asia/Manila) (checked every minute via setInterval)
 //   2. News monitor every 5 minutes
 
 export async function register() {
@@ -28,10 +28,10 @@ export async function register() {
   setInterval(async () => {
     const now = new Date();
 
-    // Daily scan at 08:00
+    // Daily scan at 00:00 UTC (= 08:00 Asia/Manila, UTC+8)
     const dateStr = now.toISOString().slice(0, 10); // "YYYY-MM-DD"
     const hour = now.getUTCHours();
-    if (hour >= 8 && dateStr !== lastDailyScanDate) {
+    if (hour >= 0 && dateStr !== lastDailyScanDate) {
       lastDailyScanDate = dateStr;
       console.log("[cron] Running daily scan...");
       try { await runScanPipeline(); } catch (err) { console.error("[cron] daily scan:", err); }
@@ -44,5 +44,5 @@ export async function register() {
     }
   }, 60_000); // tick every 60 seconds
 
-  console.log("[cron] Scheduled: daily scan @ 08:00 UTC, news monitor every 5min");
+  console.log("[cron] Scheduled: daily scan @ 00:00 UTC (08:00 Asia/Manila), news monitor every 5min");
 }
