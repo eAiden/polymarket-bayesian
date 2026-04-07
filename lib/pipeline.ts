@@ -178,6 +178,12 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
     throw new Error(msg);
   }
 
+  const scanStartedAt = Date.now();
+  // Per-scan counters for the summary line at the end
+  let opened = 0;
+  let closedByExit = 0;
+  let resolvedCount = 0;
+
   try {
     const scanErrors: ScanError[] = [];
 
@@ -185,6 +191,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
     emit({ phase: "fetching", message: "Checking for resolved markets..." });
     try {
       const resResult = await processResolvedMarkets();
+      resolvedCount = resResult.resolved;
       if (resResult.resolved > 0) {
         console.log(`[pipeline] Resolved ${resResult.resolved} markets`);
       }
@@ -193,7 +200,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
     }
 
     // 2. Fetch markets
-    emit({ phase: "fetching", message: "Fetching Polymarket markets (10-90%, ≤90 days)..." });
+    emit({ phase: "fetching", message: "Fetching Polymarket markets (10-90%, ≤45 days)..." });
     console.log("[pipeline] Fetching Polymarket markets...");
     const filtered = await fetchFilteredMarkets(scanErrors);
     console.log(`[pipeline] Found ${filtered.length} qualifying markets`);
@@ -301,6 +308,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         if (exit) {
           const pnl = computePnl(existingTrade, market.yesProbPct);
           await closeTrade(existingTrade.id, market.yesProbPct, pnl, exit.reason);
+          closedByExit++;
           openTradesByMarket.delete(market.id);
           console.log(`[pipeline] Exit (${exit.exitLabel}): closed trade #${existingTrade.id} on "${market.question.slice(0, 40)}" (P&L=$${pnl})`);
           // Save exit snapshot for training — captures what the model saw when it lost conviction
@@ -335,6 +343,7 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
             sizeUsd,
             openedAt: new Date().toISOString(),
           });
+          opened++;
           console.log(`[pipeline] Opened paper trade: ${direction} on "${market.question.slice(0, 40)}" (edge=${edgePct > 0 ? "+" : ""}${edgePct}pp, size=$${sizeUsd})`);
 
           // Save feature vector for model training
@@ -403,6 +412,10 @@ export async function runScanPipeline(onProgress?: ScanProgressCallback): Promis
         scanErrors.map(e => `${e.source}: ${e.message}`).join("; "));
     }
     console.log(`[pipeline] Done. Tracking ${finalStore.markets.length} markets total.`);
+
+    const durationSec = Math.round((Date.now() - scanStartedAt) / 1000);
+    const finalOpenCount = (await getOpenTrades()).length;
+    console.log(`[scan-summary] scanned=${filtered.length} opened=${opened} closed_by_exit=${closedByExit} resolved=${resolvedCount} open_total=${finalOpenCount} errors=${scanErrors.length} duration=${durationSec}s`);
 
     emit({ phase: "done", result });
     return result;

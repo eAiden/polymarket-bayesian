@@ -5,7 +5,9 @@ const PM_BASE = "https://gamma-api.polymarket.com/markets";
 // ─── Configurable filter thresholds ──────────────────────────────────────────
 const MIN_YES_PCT = 10;
 const MAX_YES_PCT = 90;
-const MAX_DAYS = 90;
+// Tightened from 90 → 45 to roughly halve time-to-training-data.
+// Short-dated markets resolve faster, so we accumulate calibration samples 2x faster.
+const MAX_DAYS = 45;
 const MIN_VOLUME = 10_000;
 
 function inferCategory(question: string): string {
