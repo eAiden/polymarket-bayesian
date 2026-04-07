@@ -7,7 +7,7 @@ import { MarketCard } from "./MarketCard";
 
 type EdgeFilter = "all" | "high" | "medium" | "low";
 type SortKey = "edge" | "days" | "confidence";
-type MainTab = "markets" | "trades";
+type MainTab = "markets" | "trades" | "scans";
 type TriggerFilter = "all" | "news_triggered";
 
 interface ModelStatus { trained: boolean; version: string; updatedAt: string }
@@ -20,6 +20,10 @@ interface ScanRun {
   opened: number;
   closedByExit: number;
   resolved: number;
+  skippedLowEdge: number;
+  skippedLowConf: number;
+  skippedAlreadyOpen: number;
+  openTotal: number;
   errors: number;
   degraded: boolean;
 }
@@ -443,6 +447,15 @@ export function Dashboard({ initialData }: DashboardProps) {
             <span className="main-tab-count">{allPositions.length}</span>
           )}
         </button>
+        <button
+          className={`main-tab ${mainTab === "scans" ? "active" : ""}`}
+          onClick={() => setMainTab("scans")}
+        >
+          Scans
+          {scanRuns.length > 0 && (
+            <span className="main-tab-count">{scanRuns.length}</span>
+          )}
+        </button>
       </div>
 
       {/* ── Markets tab ── */}
@@ -637,6 +650,67 @@ export function Dashboard({ initialData }: DashboardProps) {
                     .map((pos) => (
                       <TradeRow key={pos.id} pos={pos} />
                     ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Scans tab ── */}
+      {mainTab === "scans" && (
+        <div className="trades-panel">
+          {scanRuns.length === 0 ? (
+            <div className="empty-state">
+              <p className="empty-sub">No scan runs recorded yet. Trigger a scan to start logging.</p>
+            </div>
+          ) : (
+            <div className="trades-table-wrap">
+              <table className="trades-table">
+                <thead>
+                  <tr>
+                    <th scope="col">When</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Scanned</th>
+                    <th scope="col">Coverage</th>
+                    <th scope="col">Opened</th>
+                    <th scope="col">Closed</th>
+                    <th scope="col">Resolved</th>
+                    <th scope="col" title="Skipped: low edge / low confidence / already open">Skipped (le/lc/ao)</th>
+                    <th scope="col">Open total</th>
+                    <th scope="col">Errors</th>
+                    <th scope="col">Duration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scanRuns.map((r, i) => {
+                    const bad = r.degraded || r.errors > 0 || r.signalCoverage < 0.5;
+                    return (
+                      <tr key={i} className={bad ? "trade-closed" : ""}>
+                        <td style={{ fontSize: 11, color: "var(--muted)" }} title={new Date(r.finishedAt).toISOString()}>
+                          {new Date(r.finishedAt).toLocaleString()}
+                        </td>
+                        <td>
+                          <span style={{ color: bad ? "var(--red)" : "var(--green)", fontWeight: 600 }}>
+                            {r.degraded ? "DEGRADED" : bad ? "WARN" : "OK"}
+                          </span>
+                        </td>
+                        <td>{r.scanned}</td>
+                        <td style={{ color: r.signalCoverage < 0.5 ? "var(--red)" : r.signalCoverage < 0.9 ? "var(--accent)" : "var(--green)" }}>
+                          {(r.signalCoverage * 100).toFixed(0)}%
+                        </td>
+                        <td style={{ color: r.opened > 0 ? "var(--green)" : "var(--muted)" }}>{r.opened}</td>
+                        <td style={{ color: r.closedByExit > 0 ? "var(--accent)" : "var(--muted)" }}>{r.closedByExit}</td>
+                        <td style={{ color: r.resolved > 0 ? "var(--accent)" : "var(--muted)" }}>{r.resolved}</td>
+                        <td style={{ color: "var(--muted)", fontSize: 11 }}>
+                          {r.skippedLowEdge ?? 0} / {r.skippedLowConf ?? 0} / {r.skippedAlreadyOpen ?? 0}
+                        </td>
+                        <td>{r.openTotal}</td>
+                        <td style={{ color: r.errors > 0 ? "var(--red)" : "var(--muted)" }}>{r.errors}</td>
+                        <td style={{ color: "var(--muted)" }}>{r.durationSec}s</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
